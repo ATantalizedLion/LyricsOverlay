@@ -1,3 +1,4 @@
+//! Module for talking with spotify, implements only the parts of the API needed for this app
 use oauth2::basic::{BasicClient, BasicErrorResponseType};
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpClientError,
@@ -23,53 +24,99 @@ type TokenError = RequestTokenError<
 >;
 
 #[derive(Error, Debug)]
-pub enum SpotifyClientError {
-    // TODO: Cleanup error enum
+/// Error enum for spotify authentication requests
+pub enum SpotifyClientAuthError {
     #[error("unknown spotify client error")]
     Unknown,
+    #[error("Missing client id")]
+    MissingClientId,
+    #[error("Missing client secret")]
+    MissingClientSecret,
     #[error("Not authenticated")]
     NotAuthenticated,
-    #[error("Missing code in: {url}")]
-    MissingCodeAuthError { url: String },
-    #[error("Missing state in: {url}")]
-    MissingStateAuthError { url: String },
+    #[error("Missing code in auth callback URL")]
+    MissingCodeAuthError,
+    #[error("Missing state in auth callback URL")]
+    MissingStateAuthError,
     #[error("CRSF token mismatch")]
     CrsfMismatch,
     #[error("Url Error")]
     UrlParse(#[from] url::ParseError),
     #[error("IO error")]
     IoError(#[from] std::io::Error), // RequestTokenError
-    #[error("OAuth2 request token error")]
-    OAuth2Error(String),
     #[error("OAuth token request failed: {0}")]
     TokenRequest(#[from] TokenError),
     #[error("OAuth token request failed: {0}")]
     ReqwestError(#[from] reqwest::Error),
 }
 
-#[derive(Debug, Deserialize)]
-struct CurrentlyPlayingResponse {
+#[derive(Error, Debug)]
+/// Error enum for spotify requests
+pub enum SpotifyClientError {
+    #[error("Not authenticated")]
+    NotAuthenticated,
+    #[error("Url Error")]
+    UrlParse(#[from] url::ParseError),
+    #[error("IO error")]
+    IoError(#[from] std::io::Error), // RequestTokenError
+    #[error("OAuth token request failed: {0}")]
+    TokenRequest(#[from] TokenError),
+    #[error("Reqwest error: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+}
+
+#[derive(Debug, Deserialize, Clone)]
+/// (Partial) Response of the currently playing song endpoint
+pub struct CurrentlyPlayingResponse {
+    /// Type of the included item, we only care if this matches "track"
     currently_playing_type: String,
+    /// Item, can also be a podcast ep, but we only care about track
     item: Option<Track>,
+    /// Are we currently playing this song?
     is_playing: bool,
+    /// Playback progress
     progress_ms: usize,
 }
 
-#[derive(Debug, Deserialize)]
+impl CurrentlyPlayingResponse {
+    pub fn get_track_title(&self) -> Option<String> {
+        if self.currently_playing_type != "track" {
+            return None;
+        }
+
+        if let Some(track) = &self.item {
+            return Some(track.name.clone());
+        }
+
+        return None;
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+/// (Partial) Contents of the track item of the spotify API
 struct Track {
+    /// Song title
     name: String,
+    /// Spotify song id
     id: String,
+    /// Duration in ms of the song
     duration_ms: usize,
+    /// Artists listed for this song
     artists: Vec<Artist>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+/// (Partial) Contents of the artist item of the spotify API
 struct Artist {
+    /// Artist name
     name: String,
 }
 
+/// Spotify client state
 pub struct SpotifyClient {
+    /// Our very important amazing access token
     access_token: Arc<Mutex<Option<String>>>,
+    /// Client used for requests (not used in oauth request)
     client: reqwest::Client,
 }
 
@@ -83,14 +130,21 @@ impl SpotifyClient {
 
     pub async fn authenticate(
         &mut self,
-        client_id: &str,
-        client_secret: &str,
-        redirect: &str,
-    ) -> Result<(), SpotifyClientError> {
-        let client = BasicClient::new(ClientId::new(client_id.into()))
-            .set_client_secret(ClientSecret::new(client_secret.into()))
-            .set_auth_uri(AuthUrl::new(SPOTIFY_AUTH_URL.into())?)
-            .set_token_uri(TokenUrl::new(SPOTIFY_TOKEN_URL.into())?)
+        client_id: String,
+        client_secret: String,
+        redirect: String,
+    ) -> Result<(), SpotifyClientAuthError> {
+        if client_id.is_empty() {
+            return Err(SpotifyClientAuthError::MissingClientId);
+        }
+        if client_secret.is_empty() {
+            return Err(SpotifyClientAuthError::MissingClientSecret);
+        }
+
+        let client = BasicClient::new(ClientId::new(client_id))
+            .set_client_secret(ClientSecret::new(client_secret))
+            .set_auth_uri(AuthUrl::new(SPOTIFY_AUTH_URL.to_string())?)
+            .set_token_uri(TokenUrl::new(SPOTIFY_TOKEN_URL.to_string())?)
             .set_redirect_uri(RedirectUrl::new(format!("{redirect}/callback"))?);
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -103,7 +157,7 @@ impl SpotifyClient {
             .url();
 
         // Channels for callback and shutdown
-        let (tx_content, rx_content) = oneshot::channel::<(String, String)>();
+        let (tx_content, rx_content) = oneshot::channel::<(Option<String>, Option<String>)>();
         let tx_content_mutex = Arc::new(StdMutex::new(Some(tx_content)));
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let tx_shutdown_mutex = Arc::new(StdMutex::new(Some(tx_shutdown)));
@@ -111,8 +165,8 @@ impl SpotifyClient {
         let callback_route = warp::path("callback")
         .and(warp::query::<std::collections::HashMap<String, String>>())
         .map(move |params: std::collections::HashMap<String, String>| {
-            let code = params.get("code").cloned().unwrap();
-            let state = params.get("state").cloned().unwrap();
+            let code = params.get("code").cloned();
+            let state = params.get("state").cloned();
 
             if let Some(tx_inner) = tx_content_mutex.lock().unwrap().take() {
                 trace!("Sending code and state");
@@ -123,7 +177,8 @@ impl SpotifyClient {
                 tx_shutdown_inner.send(()).unwrap();
             }
             warp::reply::html(
-                "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>"
+                // Ensure this is an owned string for async reasons
+                "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>".to_string()
             )
         });
 
@@ -131,8 +186,8 @@ impl SpotifyClient {
 
         trace!("Starting server");
 
-        let url = Url::parse(redirect).expect("Invalid URL");
-        let host = url.host_str().expect("Missing host");
+        let url = Url::parse(&redirect).expect("Invalid URL");
+        let host = url.host_str().expect("Missing host").to_owned();
         let port = url.port().expect("Missing port");
         let addr: SocketAddr = format!("{host}:{port}")
             .parse()
@@ -141,8 +196,7 @@ impl SpotifyClient {
         let server = warp::serve(callback_route)
             .bind(addr)
             .await
-            .graceful(async {
-                // some signal in here, such as ctrl_c
+            .graceful(async move {
                 rx_shutdown.await.unwrap();
                 trace!("Server shutdown received");
             })
@@ -154,13 +208,19 @@ impl SpotifyClient {
 
         trace!("Awaiting rx_content");
 
-        let (code, state) = rx_content.await.map_err(|_| SpotifyClientError::Unknown)?;
+        let (code, state) = rx_content.await.unwrap();
 
-        trace!("rx_content awaited!");
+        trace!("rx_content response received!");
 
-        // Verify the CSRF token
+        let Some(code) = code else {
+            return Err(SpotifyClientAuthError::MissingCodeAuthError);
+        };
+        let Some(state) = state else {
+            return Err(SpotifyClientAuthError::MissingStateAuthError);
+        };
+
         if state != *csrf_token.secret() {
-            return Err(SpotifyClientError::CrsfMismatch);
+            return Err(SpotifyClientAuthError::CrsfMismatch);
         }
 
         let http_client = oauth2::reqwest::ClientBuilder::new()
@@ -184,7 +244,9 @@ impl SpotifyClient {
         Ok(())
     }
 
-    pub async fn get_current_track(&self) -> Result<Option<(String, String)>, SpotifyClientError> {
+    pub async fn get_current_track(
+        &self,
+    ) -> Result<Option<CurrentlyPlayingResponse>, SpotifyClientError> {
         let token_opt = self.access_token.lock().await.clone();
 
         let Some(token) = token_opt else {
@@ -207,19 +269,10 @@ impl SpotifyClient {
 
         trace!("CurrentlyPlayingResponse {playing:?}");
 
-        if !playing.is_playing || playing.currently_playing_type != "track" {
+        if playing.currently_playing_type != "track" {
             return Ok(None);
         }
 
-        if let Some(track) = playing.item {
-            let artist = track
-                .artists
-                .first()
-                .map_or_else(|| "Unknown Artist".to_string(), |a| a.name.clone());
-
-            Ok(Some((track.name, artist)))
-        } else {
-            Ok(None)
-        }
+        Ok(Some(playing))
     }
 }

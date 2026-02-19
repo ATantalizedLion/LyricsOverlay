@@ -20,7 +20,7 @@ fn parse_lrc(content: &str, strip_empty_lines: bool) -> Vec<LyricLine> {
                 let tag = &rest[1..close];
                 rest = rest[close + 1..].trim();
 
-                if let Some(ms) = parse_time_tag(tag) {
+                if let Some(ms) = parse_time_tag_to_ms(tag) {
                     let text = rest.to_string();
                     if strip_empty_lines && text.is_empty() {
                         break;
@@ -39,8 +39,7 @@ fn parse_lrc(content: &str, strip_empty_lines: bool) -> Vec<LyricLine> {
     lines
 }
 
-fn parse_time_tag(tag: &str) -> Option<u64> {
-    // mm:ss.xx  or  mm:ss:xx  or  mm:ss
+fn parse_time_tag_to_ms(tag: &str) -> Option<u64> {
     let parts: Vec<&str> = tag.splitn(2, ':').collect();
     if parts.len() != 2 {
         return None;
@@ -49,11 +48,13 @@ fn parse_time_tag(tag: &str) -> Option<u64> {
 
     let sec_part = parts[1];
     let (secs_str, centis_str) = if let Some(dot) = sec_part.find('.') {
+        // mm:ss.xx
         (&sec_part[..dot], &sec_part[dot + 1..])
     } else if let Some(colon) = sec_part.find(':') {
-        // mm:ss:xx style
+        // mm:ss:xx
         (&sec_part[..colon], &sec_part[colon + 1..])
     } else {
+        // mm:ss
         (sec_part, "0")
     };
 
