@@ -15,6 +15,8 @@ use tracing::trace;
 use url::Url;
 use warp::Filter;
 
+use crate::MessageToRT;
+
 const SPOTIFY_AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 
@@ -22,6 +24,8 @@ type TokenError = RequestTokenError<
     HttpClientError<oauth2::reqwest::Error>,
     StandardErrorResponse<BasicErrorResponseType>,
 >;
+
+pub enum MessageToSpotify {}
 
 #[derive(Error, Debug)]
 /// Error enum for spotify authentication requests
@@ -118,6 +122,13 @@ pub struct SpotifyClient {
     access_token: Arc<Mutex<Option<String>>>,
     /// Client used for requests (not used in oauth request)
     client: reqwest::Client,
+}
+
+pub async fn start_spotify_runtime(
+    tx: mpsc::Sender<MessageToSpotify>,
+    mut rx: mpsc::Receiver<MessageToRT>,
+    settings: Arc<Settings>,
+) {
 }
 
 impl SpotifyClient {
