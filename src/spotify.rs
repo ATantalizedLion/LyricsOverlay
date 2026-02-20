@@ -124,12 +124,13 @@ pub struct SpotifyClient {
     client: reqwest::Client,
 }
 
+/*
 pub async fn start_spotify_runtime(
     tx: mpsc::Sender<MessageToSpotify>,
     mut rx: mpsc::Receiver<MessageToRT>,
     settings: Arc<Settings>,
 ) {
-}
+} */
 
 impl SpotifyClient {
     pub fn new() -> Self {
