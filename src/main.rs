@@ -60,7 +60,7 @@ fn main() {
         let str = toml::ser::to_string_pretty(&Settings::default()).unwrap();
         let mut output = File::create("config.toml").unwrap();
         write!(output, "{str}").unwrap();
-        println!("Created config, please add client_id and client_secret")
+        println!("Created config, please add client_id and client_secret");
     }
 
     // Load settings file

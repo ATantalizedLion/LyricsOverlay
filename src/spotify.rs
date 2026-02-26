@@ -98,9 +98,7 @@ impl CurrentlyPlayingResponse {
         self.item.as_ref().map(|track| track.get_album().clone())
     }
     pub fn get_duration_sec(&self) -> Option<f64> {
-        self.item
-            .as_ref()
-            .map(|track| track.get_duration_sec().clone())
+        self.item.as_ref().map(Track::get_duration_sec)
     }
     pub fn get_spotify_id(&self) -> Option<String> {
         self.item.as_ref().map(|track| track.id.clone())

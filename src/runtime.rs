@@ -41,7 +41,7 @@ pub async fn start_runtime(
 
         match res {
             Ok(message) => tx.send(message).await,
-            Err(x) => tx.send(MessageToUI::DisplayError(format!("{:?}", x))).await,
+            Err(x) => tx.send(MessageToUI::DisplayError(format!("{x:?}"))).await,
         }
         .unwrap();
     }
@@ -66,7 +66,7 @@ async fn authenticate(
     let res = spotify_client.authenticate(settings).await;
 
     match res {
-        Ok(_) => Ok(MessageToUI::Authenticated),
+        Ok(()) => Ok(MessageToUI::Authenticated),
         Err(err) => Err(RuntimeError::AuthenticationFailed(err)),
     }
 }

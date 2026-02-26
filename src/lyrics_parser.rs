@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct LyricLine {
-    time_ms: u64,
-    text: String,
+    pub time_ms: usize,
+    pub text: String,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -21,7 +21,7 @@ pub struct SongLyrics {
 }
 
 impl SongLyrics {
-    pub fn find_current_index(&self, elapsed_ms: u64) -> LyricPosition {
+    pub fn find_current_index(&self, elapsed_ms: usize) -> LyricPosition {
         let mut lyric_pos = LyricPosition::BeforeStart;
 
         if self.synced_lyrics.is_empty() {
@@ -78,12 +78,12 @@ pub fn parse_lrc(content: &str, strip_empty_lines: bool) -> SongLyrics {
     }
 }
 
-fn parse_time_tag_to_ms(tag: &str) -> Option<u64> {
+fn parse_time_tag_to_ms(tag: &str) -> Option<usize> {
     let parts: Vec<&str> = tag.splitn(2, ':').collect();
     if parts.len() != 2 {
         return None;
     }
-    let minutes: u64 = parts[0].trim().parse().ok()?;
+    let minutes: usize = parts[0].trim().parse().ok()?;
 
     let sec_part = parts[1];
     let (secs_str, centis_str) = if let Some(dot) = sec_part.find('.') {
@@ -97,8 +97,8 @@ fn parse_time_tag_to_ms(tag: &str) -> Option<u64> {
         (sec_part, "0")
     };
 
-    let secs: u64 = secs_str.trim().parse().ok()?;
-    let centis: u64 = centis_str.trim().parse().unwrap_or(0);
+    let secs: usize = secs_str.trim().parse().ok()?;
+    let centis: usize = centis_str.trim().parse().unwrap_or(0);
 
     Some(minutes * 60_000 + secs * 1_000 + centis * 10)
 }

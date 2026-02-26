@@ -4,9 +4,8 @@
 //! Add a meta data file with extra track info. Maybe even store custom offsets here
 
 use std::{fmt::Display, fs, io::Write, path::Path, sync::Arc};
-use tracing::error;
+use tracing::{debug, error};
 
-use reqwest;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::trace;
@@ -122,7 +121,7 @@ impl Display for LyricsRequestInfo {
 }
 impl LyricsRequestInfo {
     pub fn from_spotify_response(
-        response: CurrentlyPlayingResponse,
+        response: &CurrentlyPlayingResponse,
     ) -> Result<Self, LyricsFetcherErr> {
         if !response.is_track() {
             return Err(LyricsFetcherErr::NoTrack());
@@ -139,7 +138,12 @@ impl LyricsRequestInfo {
     }
 
     pub fn get_track_identifier(&self) -> String {
-        format!("{},{}", self.track_name.clone(), self.duration_sec.clone())
+        format!(
+            "{}-{}.{}",
+            self.track_name.clone(),
+            self.artist_name.clone(),
+            self.duration_sec.clone()
+        )
     }
 }
 
@@ -157,6 +161,7 @@ impl LyricsFetcher {
     }
 
     fn check_cache(&self, req: &LyricsRequestInfo) -> Result<SongLyrics, LyricsCacheCheckErr> {
+        trace!("Checking cache for {req}");
         let cache_folder = Path::new(&self.settings.cache_folder);
         let track_folder = Path::join(cache_folder, req.get_track_identifier());
         let lrc_file_path = Path::join(&track_folder, "lyrics.lrc");
@@ -174,12 +179,14 @@ impl LyricsFetcher {
 
     fn store_in_cache(
         &self,
-        req: LyricsRequestInfo,
+        req: &LyricsRequestInfo,
         resp: LRCOkResponse,
         song_lyrics: &SongLyrics,
     ) -> Result<(), LyricsCacheCreateErr> {
+        trace!("Creating cache entry for {req}");
         let cache_folder = Path::new(&self.settings.cache_folder);
         let track_folder = Path::join(cache_folder, req.get_track_identifier());
+        trace!("Cache dir: {track_folder:?}");
 
         let meta = LrcCacheMeta {
             spotify_id: req.spotify_id.clone(),
@@ -191,7 +198,7 @@ impl LyricsFetcher {
             instrumental: resp.instrumental,
         };
 
-        fs::create_dir(&track_folder)?;
+        fs::create_dir_all(&track_folder)?;
         let mut meta_file = fs::File::create(Path::join(&track_folder, ".meta"))?;
         let meta_file_str = serde_json::to_string_pretty(&meta)?;
         write!(meta_file, "{meta_file_str}").unwrap();
@@ -230,15 +237,14 @@ impl LyricsFetcher {
             Ok(value) => value,
             Err(err) => {
                 return Ok(MessageToUI::DisplayError(format!(
-                    "Failed to fetch lyrics: {}",
-                    err
+                    "Failed to fetch lyrics: {err}"
                 )));
             }
         };
 
         let parsed = parse_lrc(&lrc_response.synced_lyrics, false);
 
-        let cache_store_res = self.store_in_cache(req.clone(), lrc_response, &parsed);
+        let cache_store_res = self.store_in_cache(&req, lrc_response, &parsed);
         if let Err(cache_err) = cache_store_res {
             error!("Failed creating cache entry: {:?}", cache_err);
         }
@@ -258,8 +264,9 @@ impl LyricsFetcher {
         );
         let response: reqwest::Response = self.client.get(url).send().await?;
 
-        trace!("Response for track request: {:?}", response);
+        debug!("Response for track request: {:?}", response);
 
+        //TODO: Sane handling of instrumental songs / could not find lyrics
         let lyrics: LRCOkResponse = response.json().await?;
 
         trace!("Response for track request: {:?}", lyrics);
