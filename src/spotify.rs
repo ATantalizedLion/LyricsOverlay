@@ -15,7 +15,7 @@ use tracing::trace;
 use url::Url;
 use warp::Filter;
 
-use crate::MessageToRT;
+use crate::settings::Settings;
 
 const SPOTIFY_AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
@@ -24,8 +24,6 @@ type TokenError = RequestTokenError<
     HttpClientError<oauth2::reqwest::Error>,
     StandardErrorResponse<BasicErrorResponseType>,
 >;
-
-pub enum MessageToSpotify {}
 
 #[derive(Error, Debug)]
 /// Error enum for spotify authentication requests
@@ -59,6 +57,10 @@ pub enum SpotifyClientAuthError {
 pub enum SpotifyClientError {
     #[error("Not authenticated")]
     NotAuthenticated,
+    #[error("Not playing a track")]
+    NotATrack,
+    #[error("No playing anything")]
+    NoContentResponse,
     #[error("Url Error")]
     UrlParse(#[from] url::ParseError),
     #[error("IO error")]
@@ -77,22 +79,31 @@ pub struct CurrentlyPlayingResponse {
     /// Item, can also be a podcast ep, but we only care about track
     item: Option<Track>,
     /// Are we currently playing this song?
-    is_playing: bool,
+    pub is_playing: bool,
     /// Playback progress
-    progress_ms: usize,
+    pub progress_ms: usize,
 }
 
 impl CurrentlyPlayingResponse {
+    pub fn is_track(&self) -> bool {
+        self.currently_playing_type == "track" && self.item.is_some()
+    }
     pub fn get_track_title(&self) -> Option<String> {
-        if self.currently_playing_type != "track" {
-            return None;
-        }
-
-        if let Some(track) = &self.item {
-            return Some(track.name.clone());
-        }
-
-        return None;
+        self.item.as_ref().map(|track| track.name.clone())
+    }
+    pub fn get_artist(&self) -> Option<String> {
+        self.item.as_ref().map(|track| track.get_artist().clone())
+    }
+    pub fn get_album(&self) -> Option<String> {
+        self.item.as_ref().map(|track| track.get_album().clone())
+    }
+    pub fn get_duration_sec(&self) -> Option<f64> {
+        self.item
+            .as_ref()
+            .map(|track| track.get_duration_sec().clone())
+    }
+    pub fn get_spotify_id(&self) -> Option<String> {
+        self.item.as_ref().map(|track| track.id.clone())
     }
 }
 
@@ -107,12 +118,32 @@ struct Track {
     duration_ms: usize,
     /// Artists listed for this song
     artists: Vec<Artist>,
+    /// Song's album
+    album: Album,
+}
+impl Track {
+    fn get_artist(&self) -> String {
+        self.artists.first().unwrap().name.clone()
+    }
+    fn get_album(&self) -> String {
+        self.album.name.clone()
+    }
+    fn get_duration_sec(&self) -> f64 {
+        self.duration_ms as f64 / 1000.0f64
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
 /// (Partial) Contents of the artist item of the spotify API
 struct Artist {
     /// Artist name
+    name: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+/// (Partial) Contents of the album item of the spotify API
+struct Album {
+    /// Album name
     name: String,
 }
 
@@ -124,14 +155,6 @@ pub struct SpotifyClient {
     client: reqwest::Client,
 }
 
-/*
-pub async fn start_spotify_runtime(
-    tx: mpsc::Sender<MessageToSpotify>,
-    mut rx: mpsc::Receiver<MessageToRT>,
-    settings: Arc<Settings>,
-) {
-} */
-
 impl SpotifyClient {
     pub fn new() -> Self {
         Self {
@@ -142,10 +165,12 @@ impl SpotifyClient {
 
     pub async fn authenticate(
         &mut self,
-        client_id: String,
-        client_secret: String,
-        redirect: String,
+        settings: Arc<Settings>,
     ) -> Result<(), SpotifyClientAuthError> {
+        let client_id = settings.client_id.clone();
+        let client_secret = settings.client_secret.clone();
+        let redirect = settings.redirect_url();
+
         if client_id.is_empty() {
             return Err(SpotifyClientAuthError::MissingClientId);
         }
@@ -256,9 +281,7 @@ impl SpotifyClient {
         Ok(())
     }
 
-    pub async fn get_current_track(
-        &self,
-    ) -> Result<Option<CurrentlyPlayingResponse>, SpotifyClientError> {
+    pub async fn get_current_track(&self) -> Result<CurrentlyPlayingResponse, SpotifyClientError> {
         let token_opt = self.access_token.lock().await.clone();
 
         let Some(token) = token_opt else {
@@ -274,7 +297,7 @@ impl SpotifyClient {
 
         if response.status().as_u16() == 204 {
             // No content - nothing playing
-            return Ok(None);
+            return Err(SpotifyClientError::NoContentResponse);
         }
 
         let playing: CurrentlyPlayingResponse = response.json().await?;
@@ -282,9 +305,9 @@ impl SpotifyClient {
         trace!("CurrentlyPlayingResponse {playing:?}");
 
         if playing.currently_playing_type != "track" {
-            return Ok(None);
+            return Err(SpotifyClientError::NotATrack);
         }
 
-        Ok(Some(playing))
+        Ok(playing)
     }
 }

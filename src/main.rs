@@ -5,7 +5,6 @@ use std::io::Write;
 use std::sync::Arc;
 
 use thiserror::Error;
-use tokio::runtime::Builder;
 
 use tokio::sync::mpsc;
 
@@ -13,6 +12,8 @@ use tracing::{debug, info, trace};
 use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::EnvFilter;
 
+use crate::lyrics_fetch::LyricsRequestInfo;
+use crate::lyrics_fetch::SongWithLyrics;
 use crate::overlay::LyricsAppUI;
 use crate::runtime::start_runtime;
 use crate::settings::Settings;
@@ -36,12 +37,15 @@ static APP_USER_AGENT: &str = concat!(
 pub enum MessageToUI {
     Authenticated,
     CurrentlyPlaying(CurrentlyPlayingResponse),
+    DisplayError(String),
+    GotLyrics(SongWithLyrics),
 }
 
 #[derive(Debug)]
 pub enum MessageToRT {
     Authenticate,
     GetCurrentTrack,
+    GetLyrics(LyricsRequestInfo),
 }
 
 #[derive(Error, Debug)]
@@ -89,13 +93,14 @@ fn main() {
     let (rt_to_ui, rx_in_ui) = mpsc::channel(32);
     let (ui_to_rt, rx_in_rt) = mpsc::channel(32);
 
-    // Spawn our runtime
-    let runtime = Builder::new_multi_thread()
-        .thread_name("lyrics")
-        .build()
-        .unwrap();
-
-    runtime.spawn(start_runtime(rt_to_ui, rx_in_rt, arc_settings));
+    // Spawn a thread for our runtime
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                start_runtime(rt_to_ui, rx_in_rt, arc_settings).await;
+            });
+    });
 
     // TODO: Draggable and resizable
     let options = eframe::NativeOptions {

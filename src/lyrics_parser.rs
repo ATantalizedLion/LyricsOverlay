@@ -1,10 +1,46 @@
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct LyricLine {
     time_ms: u64,
     text: String,
 }
 
-fn parse_lrc(content: &str, strip_empty_lines: bool) -> Vec<LyricLine> {
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum LyricPosition {
+    BeforeStart,
+    Line(usize),
+    AfterEnd,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct SongLyrics {
+    pub synced_lyrics: Vec<LyricLine>,
+    // TODO: Remove
+    pub text_dump: String,
+}
+
+impl SongLyrics {
+    pub fn find_current_index(&self, elapsed_ms: u64) -> LyricPosition {
+        let mut lyric_pos = LyricPosition::BeforeStart;
+
+        if self.synced_lyrics.is_empty() {
+            return lyric_pos;
+        }
+
+        for (i, line) in self.synced_lyrics.iter().enumerate() {
+            if line.time_ms <= elapsed_ms {
+                lyric_pos = LyricPosition::Line(i);
+            } else {
+                return lyric_pos;
+            }
+        }
+
+        LyricPosition::AfterEnd
+    }
+}
+
+pub fn parse_lrc(content: &str, strip_empty_lines: bool) -> SongLyrics {
     let mut lines: Vec<LyricLine> = Vec::new();
 
     for raw in content.lines() {
@@ -36,7 +72,10 @@ fn parse_lrc(content: &str, strip_empty_lines: bool) -> Vec<LyricLine> {
     }
 
     lines.sort_by_key(|l| l.time_ms);
-    lines
+    SongLyrics {
+        synced_lyrics: lines,
+        text_dump: content.to_owned(),
+    }
 }
 
 fn parse_time_tag_to_ms(tag: &str) -> Option<u64> {
@@ -62,30 +101,6 @@ fn parse_time_tag_to_ms(tag: &str) -> Option<u64> {
     let centis: u64 = centis_str.trim().parse().unwrap_or(0);
 
     Some(minutes * 60_000 + secs * 1_000 + centis * 10)
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum LyricPosition {
-    BeforeStart,
-    Line(usize),
-    AfterEnd,
-}
-pub fn find_current_index(lyrics: &[LyricLine], elapsed_ms: u64) -> LyricPosition {
-    let mut lyric_pos = LyricPosition::BeforeStart;
-
-    if lyrics.is_empty() {
-        return lyric_pos;
-    }
-
-    for (i, line) in lyrics.iter().enumerate() {
-        if line.time_ms <= elapsed_ms {
-            lyric_pos = LyricPosition::Line(i);
-        } else {
-            return lyric_pos;
-        }
-    }
-
-    LyricPosition::AfterEnd
 }
 
 #[cfg(test)]
@@ -156,23 +171,23 @@ mod tests {
             .into();
 
         let rick_parsed = parse_lrc(&rick, false);
-        assert_eq!(rick_parsed.len(), 59);
+        assert_eq!(rick_parsed.synced_lyrics.len(), 59);
 
         let rick_parsed_strip = parse_lrc(&rick, true);
-        assert_eq!(rick_parsed_strip.len(), 58);
+        assert_eq!(rick_parsed_strip.synced_lyrics.len(), 58);
 
         assert_eq!(
-            find_current_index(&rick_parsed, 19111),
+            rick_parsed.find_current_index(19111),
             LyricPosition::Line(0)
         );
 
         assert_eq!(
-            find_current_index(&rick_parsed, 1),
+            rick_parsed.find_current_index(1),
             LyricPosition::BeforeStart
         );
 
         assert_eq!(
-            find_current_index(&rick_parsed, 1_111_111_111),
+            rick_parsed.find_current_index(1_111_111_111),
             LyricPosition::AfterEnd
         );
     }
