@@ -23,6 +23,7 @@ pub enum RuntimeError {
     GetFailed(#[from] LyricsFetcherErr),
 }
 
+//TODO: Better state tracking, pause/play, next song, song end
 pub async fn start_runtime(
     tx: mpsc::Sender<MessageToUI>,
     mut rx: mpsc::Receiver<MessageToRT>,
