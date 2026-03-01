@@ -56,6 +56,8 @@ pub enum LyricsFetcherErr {
     ReqwestError(#[from] reqwest::Error),
     #[error("No track in current response for fetcher")]
     NoTrack(),
+    #[error("Song lyrics could not be found")]
+    SongLyricsNotFound(),
 }
 
 #[derive(Error, Debug)]
@@ -264,9 +266,12 @@ impl LyricsFetcher {
         );
         let response: reqwest::Response = self.client.get(url).send().await?;
 
+        if response.status().as_u16() == 404 {
+            return Err(LyricsFetcherErr::SongLyricsNotFound());
+        }
+
         debug!("Response for track request: {:?}", response);
 
-        //TODO: Sane handling of instrumental songs / could not find lyrics
         let lyrics: LRCOkResponse = response.json().await?;
 
         trace!("Response for track request: {:?}", lyrics);

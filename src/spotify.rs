@@ -126,8 +126,9 @@ impl Track {
     fn get_album(&self) -> String {
         self.album.name.clone()
     }
+    #[allow(clippy::cast_precision_loss)]
     fn get_duration_sec(&self) -> f64 {
-        self.duration_ms as f64 / 1000.0f64
+        self.duration_ms as f64 / 1000.0
     }
 }
 

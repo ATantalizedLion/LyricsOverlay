@@ -16,8 +16,6 @@ pub enum LyricPosition {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct SongLyrics {
     pub synced_lyrics: Vec<LyricLine>,
-    // TODO: Remove
-    pub text_dump: String,
 }
 
 impl SongLyrics {
@@ -74,7 +72,6 @@ pub fn parse_lrc(content: &str, strip_empty_lines: bool) -> SongLyrics {
     lines.sort_by_key(|l| l.time_ms);
     SongLyrics {
         synced_lyrics: lines,
-        text_dump: content.to_owned(),
     }
 }
 

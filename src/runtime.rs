@@ -52,6 +52,7 @@ pub async fn start_runtime(
 async fn get_current_track(spotify_client: &SpotifyClient) -> Result<MessageToUI, RuntimeError> {
     debug!("Getting current track");
     let res = spotify_client.get_current_track().await.unwrap();
+    // TODO: HANDLE ERRORS PROPERLY HERE, EXPECTED POINT OF FAILURE
 
     Ok(MessageToUI::CurrentlyPlaying(res))
 }
