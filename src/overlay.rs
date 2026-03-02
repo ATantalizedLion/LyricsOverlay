@@ -1,4 +1,7 @@
-use std::time::Instant;
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use egui::{Color32, RichText, Ui};
 use tokio::sync::mpsc;
@@ -8,6 +11,7 @@ use crate::{
     MessageToRT, MessageToUI,
     lyrics_fetch::{LyricsRequestInfo, SongWithLyrics},
     lyrics_parser::LyricPosition,
+    settings::Settings,
     spotify::CurrentlyPlayingResponse,
 };
 
@@ -19,14 +23,16 @@ pub struct LyricsAppUI {
     currently_playing: Option<CurrentlyPlayingResponse>,
     current_song_with_lyrics: Option<SongWithLyrics>,
     time_of_last_req: Instant,
+    settings: Arc<Mutex<Settings>>,
 }
 
-//TODO: Better scrolling, need to always show 2 upcoming lines, current line and past line. this means our UI has a fixed size we can grab from the settings (from font size maybe? ).
+//TODO: Better scrolling, need to always show 2 upcoming lines, current line and past line. this means our UI has a fixed size we can grab from the settings (from font size maybe?).
 impl LyricsAppUI {
     pub fn new(
         _cc: &eframe::CreationContext<'_>,
         tx: mpsc::Sender<MessageToRT>,
         rx: mpsc::Receiver<MessageToUI>,
+        settings: Arc<Mutex<Settings>>,
     ) -> Self {
         Self {
             is_auth: false,
@@ -36,6 +42,7 @@ impl LyricsAppUI {
             error_string: None,
             time_of_last_req: Instant::now(),
             current_song_with_lyrics: None,
+            settings,
         }
     }
 

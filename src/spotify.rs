@@ -8,9 +8,9 @@ use oauth2::{
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
+use std::sync::Mutex;
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as TokioMutex;
 use tracing::trace;
 use url::Url;
 use warp::Filter;
@@ -151,26 +151,31 @@ struct Album {
 /// Spotify client state
 pub struct SpotifyClient {
     /// Our very important amazing access token
-    access_token: Arc<Mutex<Option<String>>>,
+    access_token: Arc<TokioMutex<Option<String>>>,
     /// Client used for requests (not used in oauth request)
     client: reqwest::Client,
+    /// Settings!
+    settings: Arc<Mutex<Settings>>,
 }
 
 impl SpotifyClient {
-    pub fn new() -> Self {
+    pub fn new(settings: Arc<Mutex<Settings>>) -> Self {
         Self {
-            access_token: Arc::new(Mutex::new(None)),
+            access_token: Arc::new(TokioMutex::new(None)),
             client: reqwest::Client::new(),
+            settings,
         }
     }
 
-    pub async fn authenticate(
-        &mut self,
-        settings: Arc<Settings>,
-    ) -> Result<(), SpotifyClientAuthError> {
-        let client_id = settings.client_id.clone();
-        let client_secret = settings.client_secret.clone();
-        let redirect = settings.redirect_url();
+    pub async fn authenticate(&mut self) -> Result<(), SpotifyClientAuthError> {
+        let (client_id, client_secret, redirect) = {
+            let settings_lock = self.settings.try_lock().unwrap();
+            (
+                settings_lock.client_id.clone(),
+                settings_lock.client_secret.clone(),
+                settings_lock.redirect_url(),
+            )
+        };
 
         if client_id.is_empty() {
             return Err(SpotifyClientAuthError::MissingClientId);
@@ -196,9 +201,9 @@ impl SpotifyClient {
 
         // Channels for callback and shutdown
         let (tx_content, rx_content) = oneshot::channel::<(Option<String>, Option<String>)>();
-        let tx_content_mutex = Arc::new(StdMutex::new(Some(tx_content)));
+        let tx_content_mutex = Arc::new(Mutex::new(Some(tx_content)));
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let tx_shutdown_mutex = Arc::new(StdMutex::new(Some(tx_shutdown)));
+        let tx_shutdown_mutex = Arc::new(Mutex::new(Some(tx_shutdown)));
 
         let callback_route = warp::path("callback")
         .and(warp::query::<std::collections::HashMap<String, String>>())

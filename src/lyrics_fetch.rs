@@ -3,51 +3,32 @@
 //! For now, with spotify integration in mind, we store based on spotify ID
 //! Add a meta data file with extra track info. Maybe even store custom offsets here
 
-use std::{fmt::Display, fs, io::Write, path::Path, sync::Arc};
+use std::{
+    fmt::Display,
+    sync::{Arc, Mutex},
+};
+
 use tracing::{debug, error};
 
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::trace;
 
 use crate::{
     MessageToUI,
+    lyrics_fetch::cache::LyricsCacheCheckErr,
     lyrics_parser::{SongLyrics, parse_lrc},
     runtime::RuntimeError,
     settings::Settings,
     spotify::CurrentlyPlayingResponse,
 };
 
-const LRC_LIB_URL: &str = "https://lrclib.net/api/get";
+mod cache;
+mod lrc;
+mod spotify;
 
 pub struct LyricsFetcher {
     client: reqwest::Client,
-    settings: Arc<Settings>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct LRCOkResponse {
-    /// LRC ID
-    pub id: usize,
-    pub track_name: String,
-    pub artist_name: String,
-    pub album_name: String,
-    pub duration: f32,
-    pub instrumental: bool,
-    pub plain_lyrics: String,
-    pub synced_lyrics: String,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct LrcCacheMeta {
-    pub spotify_id: Option<String>,
-    pub lrc_id: usize,
-    pub track_name: String,
-    pub artist_name: String,
-    pub album_name: String,
-    pub duration_sec: f32,
-    pub instrumental: bool,
+    settings: Arc<Mutex<Settings>>,
 }
 
 #[derive(Error, Debug)]
@@ -61,23 +42,6 @@ pub enum LyricsFetcherErr {
 }
 
 #[derive(Error, Debug)]
-pub enum LyricsCacheCheckErr {
-    #[error("IO error")]
-    IoError(#[from] std::io::Error),
-    #[error("Track not found in cache")]
-    NotInCache(),
-    #[error("Serialization failed")]
-    Serde(#[from] serde_json::Error),
-}
-#[derive(Error, Debug)]
-pub enum LyricsCacheCreateErr {
-    #[error("IO error")]
-    IoError(#[from] std::io::Error),
-    #[error("Could not serialize new cache entry")]
-    SerializeErr(#[from] serde_json::Error),
-}
-
-#[derive(Error, Debug)]
 pub struct SongWithLyrics {
     pub lyrics: SongLyrics,
     duration_sec: f64,
@@ -85,6 +49,7 @@ pub struct SongWithLyrics {
     artist_name: String,
     album_name: String,
 }
+
 impl Display for SongWithLyrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
@@ -150,11 +115,11 @@ impl LyricsRequestInfo {
 }
 
 impl LyricsFetcher {
-    pub fn new(settings: Arc<Settings>) -> Self {
+    pub fn new(settings: Arc<Mutex<Settings>>) -> Self {
         Self {
             client: {
                 reqwest::Client::builder()
-                    .user_agent(super::APP_USER_AGENT)
+                    //  .user_agent(super::APP_USER_AGENT)
                     .build()
                     .unwrap()
             },
@@ -162,58 +127,8 @@ impl LyricsFetcher {
         }
     }
 
-    fn check_cache(&self, req: &LyricsRequestInfo) -> Result<SongLyrics, LyricsCacheCheckErr> {
-        trace!("Checking cache for {req}");
-        let cache_folder = Path::new(&self.settings.cache_folder);
-        let track_folder = Path::join(cache_folder, req.get_track_identifier());
-        let lrc_file_path = Path::join(&track_folder, "lyrics.lrc");
-
-        if !fs::exists(&lrc_file_path)? {
-            return Err(LyricsCacheCheckErr::NotInCache());
-        }
-
-        let lrc_file = fs::File::create(lrc_file_path)?;
-
-        let lyrics: SongLyrics = serde_json::from_reader(lrc_file)?;
-
-        Ok(lyrics)
-    }
-
-    fn store_in_cache(
-        &self,
-        req: &LyricsRequestInfo,
-        resp: LRCOkResponse,
-        song_lyrics: &SongLyrics,
-    ) -> Result<(), LyricsCacheCreateErr> {
-        trace!("Creating cache entry for {req}");
-        let cache_folder = Path::new(&self.settings.cache_folder);
-        let track_folder = Path::join(cache_folder, req.get_track_identifier());
-        trace!("Cache dir: {track_folder:?}");
-
-        let meta = LrcCacheMeta {
-            spotify_id: req.spotify_id.clone(),
-            lrc_id: resp.id,
-            track_name: resp.track_name,
-            artist_name: resp.artist_name,
-            album_name: resp.album_name,
-            duration_sec: resp.duration,
-            instrumental: resp.instrumental,
-        };
-
-        fs::create_dir_all(&track_folder)?;
-        let mut meta_file = fs::File::create(Path::join(&track_folder, ".meta"))?;
-        let meta_file_str = serde_json::to_string_pretty(&meta)?;
-        write!(meta_file, "{meta_file_str}").unwrap();
-
-        let mut lrc_file = fs::File::create(Path::join(&track_folder, "lyrics.lrc"))?;
-        let synced_lyrics_str = serde_json::to_string_pretty(&song_lyrics)?;
-        write!(lrc_file, "{synced_lyrics_str}").unwrap();
-
-        Ok(())
-    }
-
     pub async fn get_lyrics(&self, req: LyricsRequestInfo) -> Result<MessageToUI, RuntimeError> {
-        if self.settings.caching_enabled {
+        if self.settings.try_lock().unwrap().caching_enabled {
             let cache_res = self.check_cache(&req);
             match cache_res {
                 Ok(lyrics) => return Ok(MessageToUI::GotLyrics(SongWithLyrics::new(lyrics, req))),
@@ -226,8 +141,23 @@ impl LyricsFetcher {
             }
         }
 
+        // Try Spotify first
+        if let Some(ref spotify_id) = req.spotify_id {
+            match self.request_track_spotify(spotify_id).await {
+                Ok(parsed) => {
+                    debug!("Succesfully retreived parsed spotify lyrics");
+                    let cache_store_res = self.store_in_cache(&req, None, &parsed);
+                    if let Err(cache_err) = cache_store_res {
+                        error!("Failed creating cache entry: {:?}", cache_err);
+                    }
+                    return Ok(MessageToUI::GotLyrics(SongWithLyrics::new(parsed, req)));
+                }
+                Err(e) => trace!("Spotify lyrics unavailable, falling back to LRCLib: {e}"),
+            }
+        }
+
         let lrc_response = self
-            .request_track(
+            .request_track_lrc(
                 &req.duration_sec,
                 &req.track_name,
                 &req.artist_name,
@@ -239,43 +169,18 @@ impl LyricsFetcher {
             Ok(value) => value,
             Err(err) => {
                 return Ok(MessageToUI::DisplayError(format!(
-                    "Failed to fetch lyrics: {err}"
+                    "Failed to fetch lyrics: LRC {err}"
                 )));
             }
         };
 
         let parsed = parse_lrc(&lrc_response.synced_lyrics, false);
 
-        let cache_store_res = self.store_in_cache(&req, lrc_response, &parsed);
+        let cache_store_res = self.store_in_cache(&req, Some(lrc_response.id), &parsed);
         if let Err(cache_err) = cache_store_res {
             error!("Failed creating cache entry: {:?}", cache_err);
         }
 
         Ok(MessageToUI::GotLyrics(SongWithLyrics::new(parsed, req)))
-    }
-
-    async fn request_track(
-        &self,
-        duration_sec: &f64,
-        track_name: &str,
-        artist_name: &str,
-        album_name: &str,
-    ) -> Result<LRCOkResponse, LyricsFetcherErr> {
-        let url = format!(
-            "{LRC_LIB_URL}?artist_name={artist_name}&track_name={track_name}&album_name={album_name}&duration={duration_sec}"
-        );
-        let response: reqwest::Response = self.client.get(url).send().await?;
-
-        if response.status().as_u16() == 404 {
-            return Err(LyricsFetcherErr::SongLyricsNotFound());
-        }
-
-        debug!("Response for track request: {:?}", response);
-
-        let lyrics: LRCOkResponse = response.json().await?;
-
-        trace!("Response for track request: {:?}", lyrics);
-
-        Ok(lyrics)
     }
 }

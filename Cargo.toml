@@ -21,4 +21,6 @@ tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 egui = "0.33.3"
 eframe = "0.33.3"
+hmac = "0.12.1"
+sha1 = "0.10.6"
 

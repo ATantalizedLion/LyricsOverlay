@@ -3,12 +3,13 @@
 use std::fs::{File, exists};
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use thiserror::Error;
 
 use tokio::sync::mpsc;
 
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::EnvFilter;
 
@@ -25,13 +26,6 @@ mod overlay;
 mod runtime;
 mod settings;
 mod spotify;
-
-static APP_USER_AGENT: &str = concat!(
-    env!("CARGO_PKG_NAME"),
-    "/",
-    env!("CARGO_PKG_VERSION"),
-    " (github.com/ATantalizedLion/LyricsOverlay)"
-);
 
 #[derive(Debug)]
 pub enum MessageToUI {
@@ -71,35 +65,36 @@ fn main() {
             Settings::default()
         }
     };
-    let arc_settings = Arc::new(settings);
+    let arc_settings = Arc::new(Mutex::new(settings));
+    let lock = arc_settings.lock().unwrap();
 
     // Logging
     let file_appender = rolling::daily("logs", "app.log");
     let (non_blocking, _writer_guard) = non_blocking(file_appender);
-    let filter = EnvFilter::try_new(&arc_settings.clone().log_level).unwrap();
+    let filter = EnvFilter::try_new(&lock.log_level).unwrap();
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
         .with_env_filter(filter)
         .with_writer(non_blocking)
         .with_ansi(false)
         .finish();
     let _subscriber_guard = tracing::subscriber::set_global_default(subscriber);
-    info!(
-        "Logging initialized with {}",
-        &arc_settings.clone().log_level
-    );
-    trace!("Settings contents: {:?}", arc_settings.clone());
+    info!("Logging initialized with {}", &lock.log_level);
+    std::mem::drop(lock);
 
     // Channels
     let (rt_to_ui, rx_in_ui) = mpsc::channel(32);
     let (ui_to_rt, rx_in_rt) = mpsc::channel(32);
 
     // Spawn a thread for our runtime
-    std::thread::spawn(move || {
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(async move {
-                start_runtime(rt_to_ui, rx_in_rt, arc_settings).await;
-            });
+    std::thread::spawn({
+        let arc_settings = Arc::clone(&arc_settings);
+        move || {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(async move {
+                    start_runtime(rt_to_ui, rx_in_rt, arc_settings.clone()).await;
+                });
+        }
     });
 
     // TODO: Draggable and resizable
@@ -118,7 +113,14 @@ fn main() {
     _ = eframe::run_native(
         "Lyrics overlay",
         options,
-        Box::new(|cc| Ok(Box::new(LyricsAppUI::new(cc, ui_to_rt, rx_in_ui)))),
+        Box::new(|cc| {
+            Ok(Box::new(LyricsAppUI::new(
+                cc,
+                ui_to_rt,
+                rx_in_ui,
+                Arc::clone(&arc_settings),
+            )))
+        }),
     );
 
     debug!("Post-Eframe run native log");

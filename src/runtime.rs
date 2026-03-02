@@ -1,6 +1,8 @@
 #![warn(clippy::pedantic)]
 
 use std::sync::Arc;
+use std::sync::Mutex;
+
 use tokio::sync::mpsc;
 
 use tracing::{debug, trace};
@@ -27,15 +29,16 @@ pub enum RuntimeError {
 pub async fn start_runtime(
     tx: mpsc::Sender<MessageToUI>,
     mut rx: mpsc::Receiver<MessageToRT>,
-    settings: Arc<Settings>,
+    settings: Arc<Mutex<Settings>>,
 ) {
-    let mut spotify_client = SpotifyClient::new();
+    let mut spotify_client = SpotifyClient::new(settings.clone());
+
     let lyrics_fetcher = LyricsFetcher::new(settings.clone());
     // let time_of_last_currently_playing_request: Option<Instant> = None;
 
     while let Some(msg) = rx.recv().await {
         let res = match msg {
-            MessageToRT::Authenticate => authenticate(settings.clone(), &mut spotify_client).await,
+            MessageToRT::Authenticate => authenticate(&mut spotify_client).await,
             MessageToRT::GetCurrentTrack => get_current_track(&spotify_client).await,
             MessageToRT::GetLyrics(request) => lyrics_fetcher.get_lyrics(request).await,
         };
@@ -58,14 +61,10 @@ async fn get_current_track(spotify_client: &SpotifyClient) -> Result<MessageToUI
     Ok(MessageToUI::CurrentlyPlaying(res))
 }
 
-async fn authenticate(
-    settings: Arc<Settings>,
-    spotify_client: &mut SpotifyClient,
-) -> Result<MessageToUI, RuntimeError> {
+async fn authenticate(spotify_client: &mut SpotifyClient) -> Result<MessageToUI, RuntimeError> {
     debug!("Starting authentication");
 
-    // Spawn a thread to wait for authentication
-    let res = spotify_client.authenticate(settings).await;
+    let res = spotify_client.authenticate().await;
 
     match res {
         Ok(()) => Ok(MessageToUI::Authenticated),
