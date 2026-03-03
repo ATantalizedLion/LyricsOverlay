@@ -31,6 +31,7 @@ mod spotify;
 pub enum MessageToUI {
     Authenticated,
     CurrentlyPlaying(CurrentlyPlayingResponse),
+    NotCurrentlyPlaying(String),
     DisplayError(String),
     GotLyrics(SongWithLyrics),
 }

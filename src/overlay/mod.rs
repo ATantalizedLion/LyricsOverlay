@@ -7,6 +7,8 @@ use egui::{Color32, RichText, Ui};
 use tokio::sync::mpsc;
 use tracing::trace;
 
+mod settings_panel;
+
 use crate::{
     MessageToRT, MessageToUI,
     lyrics_fetch::{LyricsRequestInfo, SongWithLyrics},
@@ -24,6 +26,7 @@ pub struct LyricsAppUI {
     current_song_with_lyrics: Option<SongWithLyrics>,
     time_of_last_req: Instant,
     settings: Arc<Mutex<Settings>>,
+    settings_open: bool,
 }
 
 //TODO: Better scrolling, need to always show 2 upcoming lines, current line and past line. this means our UI has a fixed size we can grab from the settings (from font size maybe?).
@@ -43,6 +46,7 @@ impl LyricsAppUI {
             time_of_last_req: Instant::now(),
             current_song_with_lyrics: None,
             settings,
+            settings_open: false,
         }
     }
 
@@ -71,6 +75,7 @@ impl LyricsAppUI {
                     trace!("Received SongWithLyrics!: {:?}", song);
                     self.current_song_with_lyrics = Some(song);
                 }
+                MessageToUI::NotCurrentlyPlaying(_) => todo!(),
             }
         }
     }
@@ -203,6 +208,8 @@ impl eframe::App for LyricsAppUI {
                         self.authentication_ui(ui);
                         return;
                     }
+
+                    self.settings_ui(ui);
 
                     if let Some(song) = &self.current_song_with_lyrics {
                         self.display_lyrics(ui, song);

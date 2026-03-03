@@ -96,6 +96,10 @@ impl Settings {
             .try_deserialize()
     }
 
+    pub fn reset(&mut self) {
+        *self = Self { ..Self::default() };
+    }
+
     pub fn redirect_url(&self) -> String {
         format!("http://{}:{}", self.host, self.port)
     }

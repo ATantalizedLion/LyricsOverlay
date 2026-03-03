@@ -57,18 +57,25 @@ pub enum SpotifyClientAuthError {
 #[derive(Error, Debug)]
 /// Error enum for spotify requests
 pub enum SpotifyClientError {
-    #[error("Not authenticated")]
-    NotAuthenticated,
-    #[error("Not playing a track")]
-    NotATrack,
-    #[error("No playing anything")]
-    NoContentResponse,
     #[error("Url Error")]
     UrlParse(#[from] url::ParseError),
     #[error("IO error")]
     IoError(#[from] std::io::Error), // RequestTokenError
     #[error("OAuth token request failed: {0}")]
     TokenRequest(#[from] TokenError),
+    #[error("Reqwest error: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+}
+
+#[derive(Error, Debug)]
+/// Error enum for spotify requests
+pub enum SpotifyClientTrackError {
+    #[error("Not authenticated")]
+    NotAuthenticated,
+    #[error("Not playing a track")]
+    NotATrack,
+    #[error("Not playing anything")]
+    NoContentResponse,
     #[error("Reqwest error: {0}")]
     ReqwestError(#[from] reqwest::Error),
 }
@@ -287,11 +294,13 @@ impl SpotifyClient {
         Ok(())
     }
 
-    pub async fn get_current_track(&self) -> Result<CurrentlyPlayingResponse, SpotifyClientError> {
+    pub async fn get_current_track(
+        &self,
+    ) -> Result<CurrentlyPlayingResponse, SpotifyClientTrackError> {
         let token_opt = self.access_token.lock().await.clone();
 
         let Some(token) = token_opt else {
-            return Err(SpotifyClientError::NotAuthenticated);
+            return Err(SpotifyClientTrackError::NotAuthenticated);
         };
 
         let response: reqwest::Response = self
@@ -303,7 +312,7 @@ impl SpotifyClient {
 
         if response.status().as_u16() == 204 {
             // No content - nothing playing
-            return Err(SpotifyClientError::NoContentResponse);
+            return Err(SpotifyClientTrackError::NoContentResponse);
         }
 
         let playing: CurrentlyPlayingResponse = response.json().await?;
@@ -311,7 +320,7 @@ impl SpotifyClient {
         trace!("CurrentlyPlayingResponse {playing:?}");
 
         if playing.currently_playing_type != "track" {
-            return Err(SpotifyClientError::NotATrack);
+            return Err(SpotifyClientTrackError::NotATrack);
         }
 
         Ok(playing)

@@ -14,6 +14,7 @@ use crate::lyrics_fetch::LyricsFetcherErr;
 use crate::settings::Settings;
 use crate::spotify::SpotifyClient;
 use crate::spotify::SpotifyClientAuthError;
+use crate::spotify::SpotifyClientTrackError;
 
 use thiserror::Error;
 
@@ -55,10 +56,17 @@ pub async fn start_runtime(
 
 async fn get_current_track(spotify_client: &SpotifyClient) -> Result<MessageToUI, RuntimeError> {
     debug!("Getting current track");
-    let res = spotify_client.get_current_track().await.unwrap();
-    // TODO: HANDLE ERRORS PROPERLY HERE, EXPECTED POINT OF FAILURE
+    let res = spotify_client.get_current_track().await;
 
-    Ok(MessageToUI::CurrentlyPlaying(res))
+    match res {
+        Ok(song) => Ok(MessageToUI::CurrentlyPlaying(song)),
+        Err(err) => match err {
+            SpotifyClientTrackError::NotAuthenticated => todo!(),
+            SpotifyClientTrackError::NotATrack => todo!(),
+            SpotifyClientTrackError::NoContentResponse => todo!(),
+            SpotifyClientTrackError::ReqwestError(error) => todo!(),
+        },
+    }
 }
 
 async fn authenticate(spotify_client: &mut SpotifyClient) -> Result<MessageToUI, RuntimeError> {
