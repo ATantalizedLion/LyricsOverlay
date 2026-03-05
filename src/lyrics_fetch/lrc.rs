@@ -50,9 +50,12 @@ impl LyricsFetcher {
             return Err(LyricsFetcherErr::SongLyricsNotFound());
         }
 
-        let lyrics: LRCOkResponse = response.json().await?;
+        let text = response.text().await?;
+        trace!("Response body: {:?}", text);
 
-        trace!("Response for track request: {:?}", lyrics);
+        let lyrics: LRCOkResponse = serde_json::from_str(&text)?;
+
+        trace!("Lyrics: {:?}", lyrics);
 
         Ok(lyrics)
     }

@@ -1,9 +1,9 @@
+//! Caching module for the fetched lyrics, so we don't spam all our friendly APIs
+
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-use tracing::error;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -43,7 +43,7 @@ pub enum LyricsCacheCreateErr {
 
 impl LyricsFetcher {
     fn track_cache_dir(&self, req: &LyricsRequestInfo) -> PathBuf {
-        let binding = self.settings.try_lock().unwrap().cache_folder.clone();
+        let binding = self.settings.read().unwrap().cache_folder.clone();
         Path::new(&binding).join(req.get_track_identifier())
     }
 

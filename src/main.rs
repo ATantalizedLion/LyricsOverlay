@@ -1,11 +1,12 @@
 #![warn(clippy::pedantic)]
+//TODO: allow offsetting lyrics, using arrow keys?
+//TODO: Clear lyrics on lyric fetch failure (no need for error response, maybe an empty lyric reponse with "ded")
+//TODO: Handle unsynced lyrics, show scrollbar?
 
 use std::fs::{File, exists};
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::Mutex;
-
-use thiserror::Error;
+use std::sync::RwLock;
 
 use tokio::sync::mpsc;
 
@@ -18,7 +19,7 @@ use crate::lyrics_fetch::SongWithLyrics;
 use crate::overlay::LyricsAppUI;
 use crate::runtime::start_runtime;
 use crate::settings::Settings;
-use crate::spotify::{CurrentlyPlayingResponse, SpotifyClientAuthError};
+use crate::spotify::CurrentlyPlayingResponse;
 
 mod lyrics_fetch;
 mod lyrics_parser;
@@ -29,7 +30,7 @@ mod spotify;
 
 #[derive(Debug)]
 pub enum MessageToUI {
-    Authenticated,
+    AuthenticationStateUpdate(bool),
     CurrentlyPlaying(CurrentlyPlayingResponse),
     NotCurrentlyPlaying(String),
     DisplayError(String),
@@ -41,12 +42,7 @@ pub enum MessageToRT {
     Authenticate,
     GetCurrentTrack,
     GetLyrics(LyricsRequestInfo),
-}
-
-#[derive(Error, Debug)]
-pub enum LyricsAppError {
-    #[error("Spotify Authentication Error: ")]
-    Spotify(#[from] SpotifyClientAuthError),
+    InvalidateToken,
 }
 
 fn main() {
@@ -66,39 +62,39 @@ fn main() {
             Settings::default()
         }
     };
-    let arc_settings = Arc::new(Mutex::new(settings));
-    let lock = arc_settings.lock().unwrap();
-
+    let rw_settings = Arc::new(RwLock::new(settings));
+    let settings_read = rw_settings.read().unwrap();
     // Logging
     let file_appender = rolling::daily("logs", "app.log");
     let (non_blocking, _writer_guard) = non_blocking(file_appender);
-    let filter = EnvFilter::try_new(&lock.log_level).unwrap();
+    let filter = EnvFilter::try_new(&settings_read.log_level).unwrap();
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
         .with_env_filter(filter)
         .with_writer(non_blocking)
         .with_ansi(false)
         .finish();
     let _subscriber_guard = tracing::subscriber::set_global_default(subscriber);
-    info!("Logging initialized with {}", &lock.log_level);
-    std::mem::drop(lock);
+    info!("Logging initialized with {}", &settings_read.log_level);
+    std::mem::drop(settings_read);
 
     // Channels
-    let (rt_to_ui, rx_in_ui) = mpsc::channel(32);
-    let (ui_to_rt, rx_in_rt) = mpsc::channel(32);
+    let (to_ui, ui_rx) = mpsc::channel(32);
+    let (to_rt, rt_rx) = mpsc::channel(32);
 
     // Spawn a thread for our runtime
     std::thread::spawn({
-        let arc_settings = Arc::clone(&arc_settings);
+        let arc_settings = Arc::clone(&rw_settings);
+        let to_rt_clone = to_rt.clone();
         move || {
             tokio::runtime::Runtime::new()
                 .unwrap()
                 .block_on(async move {
-                    start_runtime(rt_to_ui, rx_in_rt, arc_settings.clone()).await;
+                    start_runtime(to_ui, to_rt_clone, rt_rx, arc_settings.clone()).await;
                 });
         }
     });
 
-    // TODO: Draggable and resizable
+    // TODO: resizable
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Lyrics Overlay")
@@ -117,9 +113,9 @@ fn main() {
         Box::new(|cc| {
             Ok(Box::new(LyricsAppUI::new(
                 cc,
-                ui_to_rt,
-                rx_in_ui,
-                Arc::clone(&arc_settings),
+                to_rt,
+                ui_rx,
+                Arc::clone(&rw_settings),
             )))
         }),
     );

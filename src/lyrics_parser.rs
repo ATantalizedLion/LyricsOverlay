@@ -69,7 +69,6 @@ pub fn parse_lrc(content: &str, strip_empty_lines: bool) -> SongLyrics {
         }
     }
 
-    lines.sort_by_key(|l| l.time_ms);
     SongLyrics {
         synced_lyrics: lines,
     }

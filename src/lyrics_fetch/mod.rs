@@ -1,11 +1,8 @@
 //! Module for fetching (cached) lyrics files for songs
-//!
-//! For now, with spotify integration in mind, we store based on spotify ID
-//! Add a meta data file with extra track info. Maybe even store custom offsets here
 
 use std::{
     fmt::Display,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 
 use tracing::{debug, error};
@@ -17,7 +14,7 @@ use crate::{
     MessageToUI,
     lyrics_fetch::cache::LyricsCacheCheckErr,
     lyrics_parser::{SongLyrics, parse_lrc},
-    runtime::RuntimeError,
+    runtime::{Messages, RuntimeError},
     settings::Settings,
     spotify::CurrentlyPlayingResponse,
 };
@@ -28,20 +25,22 @@ mod spotify;
 
 pub struct LyricsFetcher {
     client: reqwest::Client,
-    settings: Arc<Mutex<Settings>>,
+    settings: Arc<RwLock<Settings>>,
 }
 
 #[derive(Error, Debug)]
 pub enum LyricsFetcherErr {
     #[error("Reqwest error: {0}")]
     ReqwestError(#[from] reqwest::Error),
+    #[error("Json: {0}")]
+    JsonError(#[from] serde_json::Error),
     #[error("No track in current response for fetcher")]
     NoTrack(),
     #[error("Song lyrics could not be found")]
     SongLyricsNotFound(),
 }
 
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub struct SongWithLyrics {
     pub lyrics: SongLyrics,
     duration_sec: f64,
@@ -94,7 +93,7 @@ impl LyricsRequestInfo {
             return Err(LyricsFetcherErr::NoTrack());
         }
 
-        // we can 'safely' unwrap here because all these fields are valid if response is a track
+        // we can safely unwrap here because all these fields are valid if response is a track
         Ok(Self {
             spotify_id: Some(response.get_spotify_id().unwrap()),
             duration_sec: response.get_duration_sec().unwrap(),
@@ -115,7 +114,7 @@ impl LyricsRequestInfo {
 }
 
 impl LyricsFetcher {
-    pub fn new(settings: Arc<Mutex<Settings>>) -> Self {
+    pub fn new(settings: Arc<RwLock<Settings>>) -> Self {
         Self {
             client: {
                 reqwest::Client::builder()
@@ -127,11 +126,15 @@ impl LyricsFetcher {
         }
     }
 
-    pub async fn get_lyrics(&self, req: LyricsRequestInfo) -> Result<MessageToUI, RuntimeError> {
-        if self.settings.try_lock().unwrap().caching_enabled {
+    pub async fn get_lyrics(&self, req: LyricsRequestInfo) -> Result<Messages, RuntimeError> {
+        if self.settings.read().unwrap().caching_enabled {
             let cache_res = self.check_cache(&req);
             match cache_res {
-                Ok(lyrics) => return Ok(MessageToUI::GotLyrics(SongWithLyrics::new(lyrics, req))),
+                Ok(lyrics) => {
+                    return Ok(Messages::to_ui(MessageToUI::GotLyrics(
+                        SongWithLyrics::new(lyrics, req),
+                    )));
+                }
                 Err(cache_err) => match cache_err {
                     LyricsCacheCheckErr::NotInCache() => (),
                     _ => {
@@ -150,7 +153,9 @@ impl LyricsFetcher {
                     if let Err(cache_err) = cache_store_res {
                         error!("Failed creating cache entry: {:?}", cache_err);
                     }
-                    return Ok(MessageToUI::GotLyrics(SongWithLyrics::new(parsed, req)));
+                    return Ok(Messages::to_ui(MessageToUI::GotLyrics(
+                        SongWithLyrics::new(parsed, req),
+                    )));
                 }
                 Err(e) => trace!("Spotify lyrics unavailable, falling back to LRCLib: {e}"),
             }
@@ -168,9 +173,9 @@ impl LyricsFetcher {
         let lrc_response = match lrc_response {
             Ok(value) => value,
             Err(err) => {
-                return Ok(MessageToUI::DisplayError(format!(
-                    "Failed to fetch lyrics: LRC {err}"
-                )));
+                return Ok(Messages::to_ui(MessageToUI::DisplayError(format!(
+                    "Failed to fetch lyrics: LRC: {err}"
+                ))));
             }
         };
 
@@ -181,6 +186,8 @@ impl LyricsFetcher {
             error!("Failed creating cache entry: {:?}", cache_err);
         }
 
-        Ok(MessageToUI::GotLyrics(SongWithLyrics::new(parsed, req)))
+        Ok(Messages::to_ui(MessageToUI::GotLyrics(
+            SongWithLyrics::new(parsed, req),
+        )))
     }
 }

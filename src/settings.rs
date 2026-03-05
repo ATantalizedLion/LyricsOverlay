@@ -2,6 +2,7 @@ use std::fs;
 
 use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -20,6 +21,11 @@ pub struct Settings {
     /// Spotify client secret
     #[serde(default = "default_string")]
     pub client_secret: String,
+    /// Spotify refresh token
+    #[serde(default = "default_string")]
+    pub refresh_token: String,
+    #[serde(default = "default_bool_true")]
+    pub auto_auth: bool,
     #[serde(default = "default_log_level")]
     pub log_level: String,
     /// Background opacity 0.0–1.0
@@ -36,25 +42,31 @@ pub struct Settings {
     #[serde(default = "default_bool_true")]
     pub dim_distant_lines: bool,
     /// How often (seconds) to poll Spotify for the current track
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_secs: u32,
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            host: default_host(),
-            port: default_port(),
-            client_id: default_string(),
-            client_secret: default_string(),
-            log_level: default_log_level(),
+            // Visuals
             opacity: default_opacity(),
             font_size: default_font_size(),
+            dim_distant_lines: default_bool_true(),
+            poll_interval_ms: default_poll_interval_ms(),
+            // App settings
+            log_level: default_log_level(),
             caching_enabled: default_bool_true(),
             cache_folder: default_cache_folder(),
-            dim_distant_lines: default_bool_true(),
-            poll_interval_secs: default_poll_interval(),
+            // Auth settings
+            host: default_host(),
+            port: default_port(),
             sp_dc: default_string(),
+            // Auth session
+            client_id: default_string(),
+            client_secret: default_string(),
+            auto_auth: default_bool_true(),
+            refresh_token: default_string(),
         }
     }
 }
@@ -66,7 +78,7 @@ fn default_string() -> String {
     String::new()
 }
 fn default_log_level() -> String {
-    "trace".into()
+    "debug".into()
 }
 fn default_cache_folder() -> String {
     "cache".into()
@@ -83,8 +95,8 @@ fn default_host() -> String {
 fn default_port() -> u16 {
     8123
 }
-fn default_poll_interval() -> u32 {
-    5
+fn default_poll_interval_ms() -> u64 {
+    4000
 }
 
 impl Settings {
@@ -106,12 +118,16 @@ impl Settings {
 
     /// Serialize the current state back to `config.toml`.
     pub fn save(&self) -> Result<(), String> {
+        debug!("Starting save!");
         let toml = toml::ser::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialise settings: {e}"))?;
-        fs::write("config.toml", toml).map_err(|e| format!("Failed to write config.toml: {e}"))
+        let res =
+            fs::write("config.toml", toml).map_err(|e| format!("Failed to write config.toml: {e}"));
+        if res.is_err() {
+            error!("{}", res.clone().err().unwrap());
+        }
+        res
     }
 }
 
 //TODO: Add settings value for which lyric source to use
-//TODO: Maybe even add a sp_dc what am I playing call...
-//TODO:

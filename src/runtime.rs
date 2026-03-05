@@ -1,10 +1,12 @@
 #![warn(clippy::pedantic)]
 
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
+use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::mpsc;
 
+use tracing::info;
 use tracing::{debug, trace};
 
 use crate::MessageToRT;
@@ -13,8 +15,10 @@ use crate::lyrics_fetch::LyricsFetcher;
 use crate::lyrics_fetch::LyricsFetcherErr;
 use crate::settings::Settings;
 use crate::spotify::SpotifyClient;
-use crate::spotify::SpotifyClientAuthError;
-use crate::spotify::SpotifyClientTrackError;
+use crate::spotify::auth::SpotifyAuthClient;
+use crate::spotify::auth::SpotifyClientAuthError;
+use crate::spotify::poller::SpotifyPoller;
+use crate::spotify::poller::process_current_track_response;
 
 use thiserror::Error;
 
@@ -26,56 +30,128 @@ pub enum RuntimeError {
     GetFailed(#[from] LyricsFetcherErr),
 }
 
-//TODO: Better state tracking, pause/play, next song, song end
-pub async fn start_runtime(
-    tx: mpsc::Sender<MessageToUI>,
-    mut rx: mpsc::Receiver<MessageToRT>,
-    settings: Arc<Mutex<Settings>>,
-) {
-    let mut spotify_client = SpotifyClient::new(settings.clone());
+/// Struct to allow handling both types of messages in a send or receive loop
+#[derive(Debug)]
+pub struct Messages {
+    to_ui: Option<MessageToUI>,
+    to_rt: Option<MessageToRT>,
+}
 
-    let lyrics_fetcher = LyricsFetcher::new(settings.clone());
-    // let time_of_last_currently_playing_request: Option<Instant> = None;
-
-    while let Some(msg) = rx.recv().await {
-        let res = match msg {
-            MessageToRT::Authenticate => authenticate(&mut spotify_client).await,
-            MessageToRT::GetCurrentTrack => get_current_track(&spotify_client).await,
-            MessageToRT::GetLyrics(request) => lyrics_fetcher.get_lyrics(request).await,
-        };
-
-        match res {
-            Ok(message) => tx.send(message).await,
-            Err(x) => tx.send(MessageToUI::DisplayError(format!("{x:?}"))).await,
+impl Messages {
+    pub fn to_rt(to_rt: MessageToRT) -> Self {
+        Self {
+            to_ui: None,
+            to_rt: Some(to_rt),
         }
-        .unwrap();
+    }
+    pub fn to_ui(to_ui: MessageToUI) -> Self {
+        Self {
+            to_ui: Some(to_ui),
+            to_rt: None,
+        }
+    }
+    pub fn both(to_ui: MessageToUI, to_rt: MessageToRT) -> Self {
+        Self {
+            to_ui: Some(to_ui),
+            to_rt: Some(to_rt),
+        }
+    }
+    pub async fn send(
+        self,
+        tx_to_ui: mpsc::Sender<MessageToUI>,
+        tx_to_rt: mpsc::Sender<MessageToRT>,
+    ) {
+        if let Some(message_ui) = self.to_ui {
+            tx_to_ui.send(message_ui).await.unwrap();
+        }
+
+        if let Some(message_rt) = self.to_rt {
+            tx_to_rt.send(message_rt).await.unwrap();
+        };
+    }
+}
+
+pub async fn start_runtime(
+    tx_to_ui: mpsc::Sender<MessageToUI>,
+    tx_to_rt: mpsc::Sender<MessageToRT>,
+    mut rx: mpsc::Receiver<MessageToRT>,
+    settings: Arc<RwLock<Settings>>,
+) {
+    info!("Runtime started");
+    let spotify_auth_client = Arc::new(TokioMutex::new(SpotifyAuthClient::new(settings.clone())));
+
+    let token_handle = {
+        let auth_lock = spotify_auth_client.lock().await;
+        auth_lock.retreive_token_handle().clone()
+    };
+    let spotify_client = Arc::new(SpotifyClient::new(token_handle));
+    let lyrics_fetcher = Arc::new(LyricsFetcher::new(settings.clone()));
+
+    // Spawn a thread for our spotify poller
+    let poller = SpotifyPoller::new(spotify_client.clone(), settings.clone());
+    tokio::spawn(poller.run(tx_to_rt.clone(), tx_to_ui.clone()));
+
+    if settings.read().unwrap().auto_auth {
+        tx_to_rt.send(MessageToRT::Authenticate).await.unwrap();
     }
 
+    while let Some(msg) = rx.recv().await {
+        let tx_ui = tx_to_ui.clone();
+        let tx_rt = tx_to_rt.clone();
+        let auth = spotify_auth_client.clone();
+        let client = spotify_client.clone();
+        let lyrics = lyrics_fetcher.clone();
+
+        // Start a new thread which handles our message, and the required response.
+        // A message returns a (MessageToUI, and a MessageToRT), so an action can
+        // trigger an update of the UI, or trigger a new action.
+        tokio::spawn(async move {
+            let res = match msg {
+                MessageToRT::Authenticate => authenticate(auth).await,
+                MessageToRT::InvalidateToken => invalidate(auth).await,
+                MessageToRT::GetCurrentTrack => get_current_track(client).await,
+                MessageToRT::GetLyrics(request) => lyrics.get_lyrics(request).await,
+            };
+
+            match res {
+                Ok(msg) => {
+                    msg.send(tx_ui, tx_rt).await;
+                }
+                Err(x) => {
+                    tx_ui
+                        .send(MessageToUI::DisplayError(format!("{x:?}")))
+                        .await
+                        .unwrap();
+                }
+            };
+        });
+    }
     trace!("Reached end of runtime");
 }
 
-async fn get_current_track(spotify_client: &SpotifyClient) -> Result<MessageToUI, RuntimeError> {
-    debug!("Getting current track");
-    let res = spotify_client.get_current_track().await;
+async fn get_current_track(spotify_client: Arc<SpotifyClient>) -> Result<Messages, RuntimeError> {
+    process_current_track_response(spotify_client.get_current_track().await).await
+}
 
+async fn authenticate(
+    spotify_auth_client: Arc<TokioMutex<SpotifyAuthClient>>,
+) -> Result<Messages, RuntimeError> {
+    debug!("Starting authentication");
+    let res = spotify_auth_client.lock().await.authenticate().await;
     match res {
-        Ok(song) => Ok(MessageToUI::CurrentlyPlaying(song)),
-        Err(err) => match err {
-            SpotifyClientTrackError::NotAuthenticated => todo!(),
-            SpotifyClientTrackError::NotATrack => todo!(),
-            SpotifyClientTrackError::NoContentResponse => todo!(),
-            SpotifyClientTrackError::ReqwestError(error) => todo!(),
-        },
+        Ok(()) => Ok(Messages::to_ui(MessageToUI::AuthenticationStateUpdate(
+            true,
+        ))),
+        Err(err) => Err(RuntimeError::AuthenticationFailed(err)),
     }
 }
 
-async fn authenticate(spotify_client: &mut SpotifyClient) -> Result<MessageToUI, RuntimeError> {
-    debug!("Starting authentication");
-
-    let res = spotify_client.authenticate().await;
-
-    match res {
-        Ok(()) => Ok(MessageToUI::Authenticated),
-        Err(err) => Err(RuntimeError::AuthenticationFailed(err)),
-    }
+async fn invalidate(
+    spotify_auth_client: Arc<TokioMutex<SpotifyAuthClient>>,
+) -> Result<Messages, RuntimeError> {
+    debug!("Invalidating authentication");
+    spotify_auth_client.lock().await.invalidate_token().await;
+    Ok(Messages::to_ui(MessageToUI::AuthenticationStateUpdate(
+        false,
+    )))
 }

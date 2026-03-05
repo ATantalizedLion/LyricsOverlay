@@ -3,6 +3,7 @@ use egui::{Color32, RichText, Ui};
 use crate::settings::Settings;
 
 fn section_label(ui: &mut Ui, text: &str) {
+    ui.add_space(8.0);
     ui.label(
         RichText::new(text)
             .size(11.0)
@@ -26,7 +27,7 @@ fn settings_row(ui: &mut Ui, label: &str, widget: impl FnOnce(&mut Ui)) {
 impl super::LyricsAppUI {
     pub(super) fn settings_ui(&mut self, ui: &mut Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-            let label = if self.settings_open { "✕" } else { "⚙" };
+            let label = if self.settings_open { "X" } else { "⚙" };
             if ui
                 .add(
                     egui::Button::new(
@@ -46,9 +47,12 @@ impl super::LyricsAppUI {
             return;
         }
 
-        let mut s = self.settings.lock().unwrap().clone();
+        let mut settings = self.settings.read().unwrap().clone();
 
-        let snapshot = format!("{s:?}");
+        let snapshot = format!("{settings:?}");
+
+        let max_height = ui.available_height();
+
         egui::Frame::new()
             .fill(Color32::from_rgba_unmultiplied(20, 20, 30, 230))
             .corner_radius(egui::CornerRadius::same(8))
@@ -59,6 +63,7 @@ impl super::LyricsAppUI {
             ))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.set_max_height(max_height);
 
                 ui.label(
                     RichText::new("Settings")
@@ -68,28 +73,36 @@ impl super::LyricsAppUI {
                 );
                 ui.add_space(8.0);
 
-                display_settings(ui, &mut s);
-                behaviour_settings(ui, &mut s);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(max_height - 100.0)
+                    .show(ui, |ui| {
+                        display_settings(ui, &mut settings);
+                        behaviour_settings(ui, &mut settings);
+                        authentication_settings(ui, &mut settings);
+                    });
+
+                reset_defaults(ui, &mut settings);
             });
 
         // Write back and persist only on change
-        if format!("{s:?}") != snapshot {
-            if let Err(e) = s.save() {
+        if format!("{settings:?}") != snapshot {
+            if let Err(e) = settings.save() {
                 self.error_string = Some(e);
             }
-            *self.settings.lock().unwrap() = s;
+            *self.settings.write().unwrap() = settings;
         }
 
         ui.add_space(4.0);
     }
 }
 
-fn display_settings(ui: &mut Ui, s: &mut Settings) {
+fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     section_label(ui, "Display");
 
     settings_row(ui, "Font size", |ui| {
         ui.add(
-            egui::Slider::new(&mut s.font_size, 10.0..=72.0)
+            egui::Slider::new(&mut settings.font_size, 10.0..=72.0)
                 .step_by(1.0)
                 .suffix(" px")
                 .text_color(Color32::from_gray(200)),
@@ -97,36 +110,34 @@ fn display_settings(ui: &mut Ui, s: &mut Settings) {
     });
     settings_row(ui, "Background opacity", |ui| {
         ui.add(
-            egui::Slider::new(&mut s.opacity, 0.0..=1.0)
+            egui::Slider::new(&mut settings.opacity, 0.0..=1.0)
                 .step_by(0.01)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                 .text_color(Color32::from_gray(200)),
         );
     });
     settings_row(ui, "Dim distant lines", |ui| {
-        ui.checkbox(&mut s.dim_distant_lines, "");
+        ui.checkbox(&mut settings.dim_distant_lines, "");
     });
-
-    ui.add_space(8.0);
 }
 
-fn behaviour_settings(ui: &mut Ui, s: &mut Settings) {
+fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
     section_label(ui, "Behaviour");
 
     settings_row(ui, "Refresh interval", |ui| {
         ui.add(
-            egui::Slider::new(&mut s.poll_interval_secs, 1..=30)
+            egui::Slider::new(&mut settings.poll_interval_ms, 1..=30)
                 .suffix(" s")
                 .text_color(Color32::from_gray(200)),
         );
     });
     settings_row(ui, "Cache lyrics", |ui| {
-        ui.checkbox(&mut s.caching_enabled, "");
+        ui.checkbox(&mut settings.caching_enabled, "");
     });
-    if s.caching_enabled {
+    if settings.caching_enabled {
         settings_row(ui, "Cache folder", |ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut s.cache_folder)
+                egui::TextEdit::singleline(&mut settings.cache_folder)
                     .desired_width(120.0)
                     .text_color(Color32::from_gray(200)),
             );
@@ -134,14 +145,36 @@ fn behaviour_settings(ui: &mut Ui, s: &mut Settings) {
     }
     settings_row(ui, "Log level", |ui| {
         egui::ComboBox::from_id_salt("log_level")
-            .selected_text(s.log_level.as_str())
+            .selected_text(settings.log_level.as_str())
             .show_ui(ui, |ui| {
                 for level in ["error", "warn", "info", "debug", "trace"] {
-                    ui.selectable_value(&mut s.log_level, level.to_string(), level);
+                    ui.selectable_value(&mut settings.log_level, level.to_string(), level);
                 }
             });
     });
+}
 
+fn authentication_settings(ui: &mut Ui, settings: &mut Settings) {
+    section_label(ui, "Authentication");
+
+    settings_row(ui, "Spotify developer Client ID", |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.client_id)
+                .desired_width(120.0)
+                .text_color(Color32::from_gray(200)),
+        );
+    });
+
+    settings_row(ui, "Spotify developer Client Secret", |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut settings.client_secret)
+                .desired_width(120.0)
+                .text_color(Color32::from_gray(200)),
+        );
+    });
+}
+
+fn reset_defaults(ui: &mut Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         if ui
@@ -156,11 +189,13 @@ fn behaviour_settings(ui: &mut Ui, s: &mut Settings) {
             .clicked()
         {
             // Preserve credentials when resetting display/behaviour settings
-            let client_id = s.client_id.clone();
-            let client_secret = s.client_secret.clone();
-            s.reset();
-            s.client_id = client_id;
-            s.client_secret = client_secret;
+            let client_id = settings.client_id.clone();
+            let client_secret = settings.client_secret.clone();
+            let sp_dc = settings.sp_dc.clone();
+            settings.reset();
+            settings.client_id = client_id;
+            settings.client_secret = client_secret;
+            settings.sp_dc = sp_dc;
         }
     });
 }
