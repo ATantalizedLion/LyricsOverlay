@@ -2,6 +2,8 @@ use egui::{Color32, RichText, Ui};
 
 use crate::{lyrics_parser::LyricPosition, overlay::LyricsAppUI};
 
+//TODO: Better scrolling, need to always show 2 upcoming lines, current line and one past line. this means our UI has a fixed size we can grab from the settings (from font size maybe?).
+// We only keep those lines in memory, so we don't need to do fancy calculations on the scroll position
 impl LyricsAppUI {
     pub(super) fn display_lyrics(&mut self, ui: &mut Ui) {
         let Some(song) = &self.current_song_with_lyrics else {

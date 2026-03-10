@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use thiserror::Error;
 use tracing::trace;
@@ -157,37 +157,44 @@ impl LyricsFetcher {
                         SongWithLyrics::new(parsed, req),
                     )));
                 }
-                Err(e) => trace!("Spotify lyrics unavailable, falling back to LRCLib: {e}"),
+                Err(e) => warn!("Spotify lyrics unavailable, falling back to LRCLib: {e}"),
             }
         }
 
-        let lrc_response = self
+        match self
             .request_track_lrc(
                 &req.duration_sec,
                 &req.track_name,
                 &req.artist_name,
                 &req.album_name,
             )
-            .await;
-
-        let lrc_response = match lrc_response {
-            Ok(value) => value,
-            Err(err) => {
-                return Ok(Messages::to_ui(MessageToUI::DisplayError(format!(
-                    "Failed to fetch lyrics: LRC: {err}"
-                ))));
+            .await
+        {
+            Ok(lrc_response) => {
+                let parsed = parse_lrc(&lrc_response.synced_lyrics, false);
+                let cache_store_res = self.store_in_cache(&req, Some(lrc_response.id), &parsed);
+                if let Err(cache_err) = cache_store_res {
+                    error!("Failed creating cache entry: {:?}", cache_err);
+                }
+                return Ok(Messages::to_ui(MessageToUI::GotLyrics(
+                    SongWithLyrics::new(parsed, req),
+                )));
             }
-        };
-
-        let parsed = parse_lrc(&lrc_response.synced_lyrics, false);
-
-        let cache_store_res = self.store_in_cache(&req, Some(lrc_response.id), &parsed);
-        if let Err(cache_err) = cache_store_res {
-            error!("Failed creating cache entry: {:?}", cache_err);
+            Err(err) => {
+                warn!("Failed to fetch lyrics from LRC: {err}");
+            }
         }
 
+        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_sign_loss)]
         Ok(Messages::to_ui(MessageToUI::GotLyrics(
-            SongWithLyrics::new(parsed, req),
+            SongWithLyrics::new(
+                SongLyrics::display_text_as_lyrics(
+                    "Could not find lyrics for this song".to_owned(),
+                    (req.duration_sec * 1000.) as usize,
+                ),
+                req,
+            ),
         )))
     }
 }

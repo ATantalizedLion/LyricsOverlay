@@ -34,7 +34,6 @@ pub struct LyricsAppUI {
     settings_open: bool,
 }
 
-//TODO: Better scrolling, need to always show 2 upcoming lines, current line and past line. this means our UI has a fixed size we can grab from the settings (from font size maybe?).
 impl LyricsAppUI {
     pub fn new(
         _cc: &eframe::CreationContext<'_>,

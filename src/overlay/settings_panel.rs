@@ -126,8 +126,8 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
 
     settings_row(ui, "Refresh interval", |ui| {
         ui.add(
-            egui::Slider::new(&mut settings.poll_interval_ms, 1..=30)
-                .suffix(" s")
+            egui::Slider::new(&mut settings.poll_interval_ms, 1000..=10000)
+                .suffix(" ms")
                 .text_color(Color32::from_gray(200)),
         );
     });

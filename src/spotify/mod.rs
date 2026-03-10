@@ -8,8 +8,6 @@ use tracing::trace;
 pub mod auth;
 pub mod poller;
 
-// TODO token refresh (spotify expiry 1h)
-
 #[derive(Error, Debug)]
 /// Error enum for spotify requests
 pub enum SpotifyClientTrackError {

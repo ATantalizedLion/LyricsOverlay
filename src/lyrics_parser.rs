@@ -19,6 +19,17 @@ pub struct SongLyrics {
 }
 
 impl SongLyrics {
+    pub fn display_text_as_lyrics(text: String, duration_ms: usize) -> Self {
+        Self {
+            synced_lyrics: vec![
+                LyricLine { time_ms: 0, text },
+                LyricLine {
+                    time_ms: duration_ms,
+                    text: " ".to_string(),
+                },
+            ],
+        }
+    }
     pub fn find_current_index(&self, elapsed_ms: usize) -> LyricPosition {
         let mut lyric_pos = LyricPosition::BeforeStart;
 

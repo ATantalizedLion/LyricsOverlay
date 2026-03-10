@@ -53,9 +53,6 @@ pub async fn process_current_track_response(
     match res {
         Ok(song) => Ok(Messages::to_ui(MessageToUI::CurrentlyPlaying(song))),
         Err(err) => match err {
-            SpotifyClientTrackError::NotAuthenticated => Ok(Messages::to_ui(
-                MessageToUI::AuthenticationStateUpdate(false),
-            )),
             SpotifyClientTrackError::NotATrack => Ok(Messages::to_ui(
                 MessageToUI::NotCurrentlyPlaying("Not playing a song".to_owned()),
             )),
@@ -65,9 +62,9 @@ pub async fn process_current_track_response(
             SpotifyClientTrackError::ReqwestError(error) => Ok(Messages::to_ui(
                 MessageToUI::NotCurrentlyPlaying(format!("anything: {error}").to_owned()),
             )),
-            SpotifyClientTrackError::TokenError => Ok(Messages::to_ui(
-                MessageToUI::AuthenticationStateUpdate(false),
-            )),
+            SpotifyClientTrackError::NotAuthenticated | SpotifyClientTrackError::TokenError => Ok(
+                Messages::to_ui(MessageToUI::AuthenticationStateUpdate(false)),
+            ),
             SpotifyClientTrackError::BadRequest => todo!(),
             SpotifyClientTrackError::RateLimitsExceeded => todo!(),
         },
