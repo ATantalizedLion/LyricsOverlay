@@ -10,7 +10,7 @@ pub struct LyricLine {
 pub enum LyricPosition {
     BeforeStart,
     Line(usize),
-    AfterEnd,
+    AfterEnd(usize),
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -45,7 +45,7 @@ impl SongLyrics {
             }
         }
 
-        LyricPosition::AfterEnd
+        LyricPosition::AfterEnd(self.synced_lyrics.len())
     }
 }
 
@@ -195,7 +195,7 @@ mod tests {
 
         assert_eq!(
             rick_parsed.find_current_index(1_111_111_111),
-            LyricPosition::AfterEnd
+            LyricPosition::AfterEnd(rick_parsed.synced_lyrics.len())
         );
     }
 }

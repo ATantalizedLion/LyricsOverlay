@@ -1,15 +1,26 @@
-use egui::{Color32, RichText, Ui};
+use egui::{Align, Color32, Layout, RichText, Ui};
 
 use crate::{lyrics_parser::LyricPosition, overlay::LyricsAppUI};
+/// Smooth ease-in-out (cubic)
+fn ease_in_out(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
 
-//TODO: Better scrolling, need to always show 2 upcoming lines, current line and one past line. this means our UI has a fixed size we can grab from the settings (from font size maybe?).
-// We only keep those lines in memory, so we don't need to do fancy calculations on the scroll position
 impl LyricsAppUI {
     pub(super) fn display_lyrics(&mut self, ui: &mut Ui) {
         let Some(song) = &self.current_song_with_lyrics else {
             self.waiting_for_lyrics(ui);
             return;
         };
+
+        // Get all relevnat settings vars here:
+        let binding = self.settings.read().unwrap();
+        let line_spacing = binding.line_spacing;
+        let font_size = binding.font_size;
+        let transition_ms = 400; // TODO: Add to settings
+        drop(binding);
+
+        let row_height = font_size + line_spacing;
 
         let progress_ms = self.currently_playing.as_ref().map_or(0, |p| p.progress_ms);
 
@@ -19,65 +30,91 @@ impl LyricsAppUI {
         }
 
         let current_ms = progress_ms as u128 + self.ms_played_since_last_update;
-        let current_pos = song
+        let current_index = match song
             .lyrics
-            .find_current_index(current_ms.try_into().unwrap());
-        let current_idx = match current_pos {
-            LyricPosition::Line(n) => Some(n),
-            _ => None,
+            .find_current_index(current_ms.try_into().unwrap())
+        {
+            LyricPosition::BeforeStart => 0,
+            LyricPosition::Line(n) => n,
+            LyricPosition::AfterEnd(n) => n,
         };
+        let synced_lyrics = &song.lyrics.synced_lyrics;
 
-        let line_height = 36.0;
-        let panel_height = ui.available_height();
+        // TODO: Only start moving when within transition_ms of next_line
+        // Current index is already in focus
+        let progress = if current_index + 1 < synced_lyrics.len() {
+            let t0 = synced_lyrics[current_index].time_ms as i64;
+            let t1 = synced_lyrics[current_index + 1].time_ms as i64;
+            ui.label(format!("Timing: {t0}-{t1}"));
 
-        // Scroll so the current line sits in the vertical center
-        // TODO: This has some drift.
-        let scroll_offset = current_idx
-            .map_or(0.0, |i| {
-                i as f32 * line_height - panel_height / 2.0 + line_height / 2.0
-            })
-            .max(0.0);
+            let elapsed = current_ms as i64 - t0;
+            let duration = t1 - t0;
 
-        egui::ScrollArea::vertical()
-            .vertical_scroll_offset(scroll_offset)
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    for (i, line) in song.lyrics.synced_lyrics.iter().enumerate() {
-                        let dist = current_idx.map_or(99, |ci| i.abs_diff(ci));
+            if duration > 0 {
+                (elapsed as f32 / duration as f32).clamp(0.0, 1.0)
+            } else {
+                1.0
+            }
+        } else {
+            // Last line — no next line to interpolate toward
+            1.0
+        };
+        let eased = ease_in_out(progress);
+        let effective_ci = current_index as f32 + eased;
 
-                        let (size, alpha) = match dist {
-                            0 => (26.0, 255u8), // current — full white, large
-                            1 => (20.0, 180u8), // adjacent — slightly dimmed
-                            2 => (17.0, 110u8),
-                            _ => (15.0, 55u8), // far — ghosted
-                        };
+        let half = 3usize;
+        let ci_rounded = effective_ci.round() as usize;
+        let center = ci_rounded.clamp(half, synced_lyrics.len().saturating_sub(half + 1));
+        let start = center - half;
+        let end = (center + half).min(synced_lyrics.len() - 1);
 
-                        let color = match current_idx {
-                            None => Color32::from_rgba_unmultiplied(200, 200, 200, alpha),
-                            Some(ci) if i < ci => {
-                                Color32::from_rgba_unmultiplied(200, 180, 255, alpha)
-                            } // past, slightly purple
-                            Some(ci) if i == ci => {
-                                Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
-                            } // current, white
-                            Some(_) => Color32::from_rgba_unmultiplied(180, 210, 255, alpha), // future, slightly blue
-                        };
+        let base_size = font_size * 0.6;
+        let highlight_size = font_size;
 
-                        let text = RichText::new(&line.text).size(size).color(color);
+        ui.label(format!("progress, eased: {:.2}, {:.2}", progress, eased));
+        ui.label(format!("effective_CI, center: {:.2}", effective_ci));
+        ui.label(format!("current_ms: {:.2}", current_ms));
 
-                        // Reserve fixed height per line so scroll math is stable
-                        ui.allocate_ui(egui::vec2(ui.available_width(), line_height), |ui| {
-                            ui.centered_and_justified(|ui| {
-                                ui.label(text);
-                            });
-                        });
-                    }
-                    // Padding so last lines can scroll to center
-                    ui.add_space(panel_height / 2.0);
-                });
-            });
+        let slide_frac = effective_ci - effective_ci.floor();
+        let slide_offset = slide_frac * row_height; // pixels to shift up
+
+        ui.with_layout(Layout::top_down(Align::Center), |ui| {
+            let center_offset = ui.available_height() * 0.25 - row_height * 0.5;
+            ui.add_space(center_offset - slide_offset); // subtract to slide up
+            for i in start..=end {
+                let line = &synced_lyrics[i];
+                let dist = (i as f32 - effective_ci).abs();
+
+                // Size falls off with distance based on setttings: each step away shrinks by a fixed ratio
+                let size_range = highlight_size - base_size;
+                let size = (highlight_size - dist * size_range * 0.5).max(base_size * 0.7);
+
+                // Alpha falls off with distance
+                let edge_dist = ((i as f32 - effective_ci).abs() - 2.0).max(0.0);
+                let edge_fade = (1.0 - edge_dist).clamp(0.0, 1.0);
+                let alpha = (ease_in_out(edge_fade) * 255.0) as u8;
+
+                // Color: blend between past/present/future tints based on signed distance
+                let past_color = [200u8, 180, 255]; // purple tint
+                let current_color = [255u8, 255, 255]; // white
+                let future_color = [180u8, 210, 255]; // blue tint
+
+                let signed = i as f32 - effective_ci;
+                let (r, g, b) = if signed < 0.0 {
+                    // Between past and current
+                    let t = (-signed).min(1.0);
+                    lerp_color(current_color, past_color, t)
+                } else {
+                    // Between current and future
+                    let t = signed.min(1.0);
+                    lerp_color(current_color, future_color, t)
+                };
+
+                let color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                ui.label(RichText::new(&line.text).size(size).color(color).strong());
+                ui.add_space(line_spacing);
+            }
+        });
     }
 
     fn waiting_for_lyrics(&mut self, ui: &mut Ui) {
@@ -98,4 +135,9 @@ impl LyricsAppUI {
             );
         });
     }
+}
+
+fn lerp_color(a: [u8; 3], b: [u8; 3], t: f32) -> (u8, u8, u8) {
+    let l = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+    (l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2]))
 }

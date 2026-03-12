@@ -34,6 +34,9 @@ pub struct Settings {
     /// Font size for the active lyric line (px)
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    /// Line spacing
+    #[serde(default = "default_line_spacing")]
+    pub line_spacing: f32,
     #[serde(default = "default_bool_true")]
     pub caching_enabled: bool,
     #[serde(default = "default_cache_folder")]
@@ -52,6 +55,7 @@ impl Default for Settings {
             // Visuals
             opacity: default_opacity(),
             font_size: default_font_size(),
+            line_spacing: default_font_size(),
             dim_distant_lines: default_bool_true(),
             poll_interval_ms: default_poll_interval_ms(),
             // App settings
@@ -88,6 +92,9 @@ fn default_opacity() -> f32 {
 }
 fn default_font_size() -> f32 {
     26.0
+}
+fn default_line_spacing() -> f32 {
+    42.0
 }
 fn default_host() -> String {
     "127.0.0.1".to_string()

@@ -16,6 +16,8 @@ use warp::Filter;
 
 use crate::settings::Settings;
 
+//TODO: deal with revoking of refresh tokens
+
 const SPOTIFY_AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 
