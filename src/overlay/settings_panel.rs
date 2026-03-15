@@ -47,7 +47,7 @@ impl super::LyricsAppUI {
             return;
         }
 
-        let mut settings = self.settings.read().unwrap().clone();
+        let mut settings = self.settings.blocking_read().clone();
 
         let snapshot = format!("{settings:?}");
 
@@ -90,7 +90,7 @@ impl super::LyricsAppUI {
             if let Err(e) = settings.save() {
                 self.error_string = Some(e);
             }
-            *self.settings.write().unwrap() = settings;
+            *self.settings.blocking_write() = settings;
         }
 
         ui.add_space(4.0);
@@ -118,6 +118,17 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     });
     settings_row(ui, "Dim distant lines", |ui| {
         ui.checkbox(&mut settings.dim_distant_lines, "");
+    });
+    settings_row(ui, "Scroll smoothly", |ui| {
+        ui.checkbox(&mut settings.scroll_smoothly, "");
+    });
+    settings_row(ui, "Transition time in ms", |ui| {
+        ui.add(
+            egui::Slider::new(&mut settings.line_transition_ms, 0..=1000)
+                .step_by(10.0)
+                .custom_formatter(|v, _| format!("{}ms", v))
+                .text_color(Color32::from_gray(200)),
+        );
     });
 }
 

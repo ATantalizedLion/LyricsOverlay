@@ -22,8 +22,14 @@ pub struct Settings {
     #[serde(default = "default_string")]
     pub client_secret: String,
     /// Spotify refresh token
-    #[serde(default = "default_string")]
-    pub refresh_token: String,
+    #[serde(default = "default_string_none")]
+    pub refresh_token: Option<String>,
+    /// Spotify access token
+    #[serde(default = "default_string_none")]
+    pub access_token: Option<String>,
+    /// Spotify token expiry date/time
+    #[serde(default = "default_time_none")]
+    pub expiry_time_as_unix: Option<u64>,
     #[serde(default = "default_bool_true")]
     pub auto_auth: bool,
     #[serde(default = "default_log_level")]
@@ -47,6 +53,12 @@ pub struct Settings {
     /// How often (seconds) to poll Spotify for the current track
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
+    /// Scroll smoothly or jump per line
+    #[serde(default = "default_bool_false")]
+    pub scroll_smoothly: bool,
+    /// Time between line transitions
+    #[serde(default = "default_transition_time")]
+    pub line_transition_ms: u64,
 }
 
 impl Default for Settings {
@@ -57,11 +69,13 @@ impl Default for Settings {
             font_size: default_font_size(),
             line_spacing: default_font_size(),
             dim_distant_lines: default_bool_true(),
-            poll_interval_ms: default_poll_interval_ms(),
+            scroll_smoothly: default_bool_false(),
+            line_transition_ms: default_transition_time(),
             // App settings
             log_level: default_log_level(),
             caching_enabled: default_bool_true(),
             cache_folder: default_cache_folder(),
+            poll_interval_ms: default_poll_interval_ms(),
             // Auth settings
             host: default_host(),
             port: default_port(),
@@ -70,13 +84,23 @@ impl Default for Settings {
             client_id: default_string(),
             client_secret: default_string(),
             auto_auth: default_bool_true(),
-            refresh_token: default_string(),
+            refresh_token: None,
+            access_token: None,
+            expiry_time_as_unix: None,
         }
     }
 }
-
 fn default_bool_true() -> bool {
     true
+}
+fn default_bool_false() -> bool {
+    false
+}
+fn default_string_none() -> Option<String> {
+    None
+}
+fn default_time_none() -> Option<u64> {
+    None
 }
 fn default_string() -> String {
     String::new()
@@ -104,6 +128,9 @@ fn default_port() -> u16 {
 }
 fn default_poll_interval_ms() -> u64 {
     4000
+}
+fn default_transition_time() -> u64 {
+    400
 }
 
 impl Settings {

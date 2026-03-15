@@ -147,7 +147,7 @@ impl LyricsFetcher {
         &self,
         spotify_id: &str,
     ) -> Result<SongLyrics, LyricsFetcherErr> {
-        let sp_dc = self.settings.read().unwrap().sp_dc.clone();
+        let sp_dc = self.settings.read().await.sp_dc.clone();
         debug!(
             "sp_dc is {} chars, starts with: {}",
             sp_dc.len(),

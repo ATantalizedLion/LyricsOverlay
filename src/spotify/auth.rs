@@ -6,11 +6,12 @@ use oauth2::{
     TokenUrl,
 };
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::sync::RwLock as TokioRwLock;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 use url::Url;
 use warp::Filter;
 
@@ -56,13 +57,13 @@ pub struct SpotifyAuthClient {
     /// Our very important amazing access token
     access_token: Arc<TokioRwLock<Option<String>>>,
     /// Settings!
-    settings: Arc<RwLock<Settings>>,
+    settings: Arc<TokioRwLock<Settings>>,
     refresh_token: Arc<TokioRwLock<Option<String>>>,
     token_expiry: Arc<TokioRwLock<Option<std::time::Instant>>>,
 }
 
 impl SpotifyAuthClient {
-    pub fn new(settings: Arc<RwLock<Settings>>) -> Self {
+    pub fn new(settings: Arc<TokioRwLock<Settings>>) -> Self {
         Self {
             access_token: Arc::new(TokioRwLock::new(None)),
             settings,
@@ -72,20 +73,50 @@ impl SpotifyAuthClient {
     }
 
     pub async fn authenticate(&mut self) -> Result<(), SpotifyClientAuthError> {
-        let (client_id, client_secret, redirect, saved_refresh) = {
-            let settings_lock = self.settings.read().unwrap();
+        let (
+            client_id,
+            client_secret,
+            redirect,
+            saved_refresh,
+            stored_access_token,
+            stored_expiry_time,
+        ) = {
+            let settings_lock = self.settings.read().await;
             (
                 settings_lock.client_id.clone(),
                 settings_lock.client_secret.clone(),
                 settings_lock.redirect_url(),
                 settings_lock.refresh_token.clone(),
+                settings_lock.access_token.clone(),
+                settings_lock.expiry_time_as_unix.clone(),
             )
         };
 
-        if !saved_refresh.is_empty() {
+        // TODO: Read stored token info here. If token is not yet expired, we can just use it, instead of requesting a new one.
+        if let Some(a_token) = stored_access_token
+            && let Some(exp) = stored_expiry_time
+        {
+            if exp > get_unix_time() {
+                info!(
+                    "Using stored access token expiring in {} secs",
+                    exp - get_unix_time()
+                );
+                let mut token_guard = self.access_token.write().await;
+                *token_guard = Some(a_token);
+                return Ok(());
+            } else {
+                debug!(
+                    "Stored access token expired {} secs ago",
+                    get_unix_time() - exp
+                );
+            }
+        }
+
+        if saved_refresh.clone().is_some_and(|x| !x.is_empty()) {
             let mut guard = self.refresh_token.write().await;
-            *guard = Some(saved_refresh);
+            *guard = saved_refresh;
             drop(guard);
+            info!("Getting access token from stored refresh token",);
             return self.refresh_access_token().await;
         }
 
@@ -189,19 +220,24 @@ impl SpotifyAuthClient {
 
         let mut token_guard = self.access_token.write().await;
         *token_guard = Some(token_result.access_token().secret().clone());
+
+        let mut rw_set = self.settings.write().await;
+        rw_set.access_token = token_guard.clone();
+
         if let Some(refresh) = token_result.refresh_token() {
             debug!("Refresh: {}", refresh.secret());
             let mut refresh_guard = self.refresh_token.write().await;
             *refresh_guard = Some(refresh.secret().clone());
-            let mut rw_set = self.settings.write().unwrap();
-            rw_set.refresh_token = refresh.secret().clone();
-            rw_set.save().unwrap();
+            rw_set.refresh_token = Some(refresh.secret().clone());
         }
 
         if let Some(duration) = token_result.expires_in() {
             let mut expiry_guard = self.token_expiry.write().await;
             *expiry_guard = Some(std::time::Instant::now() + duration);
+            rw_set.expiry_time_as_unix =
+                Some(get_unix_time() + token_result.expires_in().unwrap().as_secs());
         }
+        rw_set.save().unwrap();
 
         debug!("Successfully authenticated!");
         Ok(())
@@ -216,7 +252,7 @@ impl SpotifyAuthClient {
         };
 
         let (client_id, client_secret) = {
-            let s = self.settings.read().unwrap();
+            let s = self.settings.read().await;
             (s.client_id.clone(), s.client_secret.clone())
         };
 
@@ -235,22 +271,29 @@ impl SpotifyAuthClient {
             .request_async(&http_client)
             .await?;
 
+        // TODO: deduplication between this and regular authentication process
         let mut token_guard = self.access_token.write().await;
         *token_guard = Some(token_result.access_token().secret().clone());
+
+        let mut rw_settings = self.settings.write().await;
+        rw_settings.access_token = token_guard.clone();
 
         // Spotify may issue a new refresh token — update if so
         if let Some(new_refresh) = token_result.refresh_token() {
             let mut refresh_guard = self.refresh_token.write().await;
             *refresh_guard = Some(new_refresh.secret().clone());
-            let mut rw_set = self.settings.write().unwrap();
-            rw_set.refresh_token = new_refresh.secret().clone();
-            rw_set.save().unwrap();
+            rw_settings.refresh_token = Some(new_refresh.secret().clone());
         }
 
         if let Some(duration) = token_result.expires_in() {
             let mut expiry_guard = self.token_expiry.write().await;
             *expiry_guard = Some(std::time::Instant::now() + duration);
+            // Store the unix time
+            rw_settings.expiry_time_as_unix =
+                Some(get_unix_time() + token_result.expires_in().unwrap().as_secs());
         }
+
+        rw_settings.save().unwrap();
 
         Ok(())
     }
@@ -263,4 +306,11 @@ impl SpotifyAuthClient {
     pub fn retreive_token_handle(&self) -> Arc<TokioRwLock<Option<String>>> {
         self.access_token.clone()
     }
+}
+
+fn get_unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }

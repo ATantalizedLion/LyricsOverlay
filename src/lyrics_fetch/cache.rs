@@ -42,17 +42,17 @@ pub enum LyricsCacheCreateErr {
 }
 
 impl LyricsFetcher {
-    fn track_cache_dir(&self, req: &LyricsRequestInfo) -> PathBuf {
-        let binding = self.settings.read().unwrap().cache_folder.clone();
+    async fn track_cache_dir(&self, req: &LyricsRequestInfo) -> PathBuf {
+        let binding = self.settings.read().await.cache_folder.clone();
         Path::new(&binding).join(req.get_track_identifier())
     }
 
-    pub(super) fn check_cache(
+    pub(super) async fn check_cache(
         &self,
         req: &LyricsRequestInfo,
     ) -> Result<SongLyrics, LyricsCacheCheckErr> {
         trace!("Checking cache for {req}");
-        let lrc_file_path = self.track_cache_dir(req).join("lyrics.lrc");
+        let lrc_file_path = self.track_cache_dir(req).await.join("lyrics.lrc");
 
         if !fs::exists(&lrc_file_path)? {
             return Err(LyricsCacheCheckErr::NotInCache());
@@ -65,14 +65,14 @@ impl LyricsFetcher {
         Ok(lyrics)
     }
 
-    pub(super) fn store_in_cache(
+    pub(super) async fn store_in_cache(
         &self,
         req: &LyricsRequestInfo,
         lrc_id: Option<usize>,
         song_lyrics: &SongLyrics,
     ) -> Result<(), LyricsCacheCreateErr> {
         trace!("Creating cache entry for {req}");
-        let track_folder = self.track_cache_dir(req);
+        let track_folder = self.track_cache_dir(req).await;
         trace!("Cache dir: {track_folder:?}");
 
         let meta = LyricCacheMeta {

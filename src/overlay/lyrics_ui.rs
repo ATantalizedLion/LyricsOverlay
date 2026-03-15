@@ -8,16 +8,30 @@ fn ease_in_out(t: f32) -> f32 {
 
 impl LyricsAppUI {
     pub(super) fn display_lyrics(&mut self, ui: &mut Ui) {
+        // Do we have lyrics
         let Some(song) = &self.current_song_with_lyrics else {
             self.waiting_for_lyrics(ui);
             return;
         };
+        // Make sure it's not the previous song's lyrics
+        if Some(song.track_name.clone())
+            != self
+                .currently_playing
+                .as_ref()
+                .map_or(None, |p| p.get_track_title())
+        {
+            self.waiting_for_lyrics(ui);
+            return;
+        }
+        // TODO: Add title header for which song is currently playing
 
-        // Get all relevnat settings vars here:
-        let binding = self.settings.read().unwrap();
+        // TODO: Progress bar towards next lyric, either at bottom or under current line
+        // Get all relevant settings vars here:
+        let binding = self.settings.blocking_read();
         let line_spacing = binding.line_spacing;
         let font_size = binding.font_size;
-        let transition_ms = 400; // TODO: Add to settings
+        let transition_ms = binding.line_transition_ms;
+        let scroll_smoothly = binding.scroll_smoothly;
         drop(binding);
 
         let row_height = font_size + line_spacing;
@@ -42,7 +56,7 @@ impl LyricsAppUI {
 
         // TODO: Only start moving when within transition_ms of next_line
         // Current index is already in focus
-        let progress = if current_index + 1 < synced_lyrics.len() {
+        let progress = if scroll_smoothly && current_index + 1 < synced_lyrics.len() {
             let t0 = synced_lyrics[current_index].time_ms as i64;
             let t1 = synced_lyrics[current_index + 1].time_ms as i64;
             ui.label(format!("Timing: {t0}-{t1}"));
@@ -56,23 +70,22 @@ impl LyricsAppUI {
                 1.0
             }
         } else {
-            // Last line — no next line to interpolate toward
-            1.0
+            // Last line — no next line to interpolate toward,
+            // OR we have disabled scrolling "smoothly"
+            0.0
         };
         let eased = ease_in_out(progress);
         let effective_ci = current_index as f32 + eased;
 
-        let half = 3usize;
         let ci_rounded = effective_ci.round() as usize;
-        let center = ci_rounded.clamp(half, synced_lyrics.len().saturating_sub(half + 1));
-        let start = center - half;
-        let end = (center + half).min(synced_lyrics.len() - 1);
+        let start = ci_rounded.saturating_sub(2);
+        let end = (ci_rounded + 2).min(synced_lyrics.len() - 1);
 
         let base_size = font_size * 0.6;
         let highlight_size = font_size;
 
-        ui.label(format!("progress, eased: {:.2}, {:.2}", progress, eased));
-        ui.label(format!("effective_CI, center: {:.2}", effective_ci));
+        ui.label(format!("progress vs eased: {:.2}, {:.2}", progress, eased));
+        ui.label(format!("effective_current index: {:.2}", effective_ci));
         ui.label(format!("current_ms: {:.2}", current_ms));
 
         let slide_frac = effective_ci - effective_ci.floor();
@@ -137,6 +150,7 @@ impl LyricsAppUI {
     }
 }
 
+/// Helper for nearly lerping between two colors
 fn lerp_color(a: [u8; 3], b: [u8; 3], t: f32) -> (u8, u8, u8) {
     let l = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
     (l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2]))

@@ -7,8 +7,8 @@
 use std::fs::{File, exists};
 use std::io::Write;
 use std::sync::Arc;
-use std::sync::RwLock;
 
+use tokio::sync::RwLock as TokioRwLock;
 use tokio::sync::mpsc;
 
 use tracing::{debug, info};
@@ -63,8 +63,8 @@ fn main() {
             Settings::default()
         }
     };
-    let rw_settings = Arc::new(RwLock::new(settings));
-    let settings_read = rw_settings.read().unwrap();
+    let rw_settings = Arc::new(TokioRwLock::new(settings));
+    let settings_read = rw_settings.blocking_read();
     // Logging
     let file_appender = rolling::daily("logs", "app.log");
     let (non_blocking, _writer_guard) = non_blocking(file_appender);
@@ -95,7 +95,7 @@ fn main() {
         }
     });
 
-    // TODO: resizable
+    // TODO: resizable or auto calculated size
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Lyrics Overlay")

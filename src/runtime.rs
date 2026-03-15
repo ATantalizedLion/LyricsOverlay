@@ -1,9 +1,9 @@
 #![warn(clippy::pedantic)]
 
 use std::sync::Arc;
-use std::sync::RwLock;
 
 use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::RwLock as TokioRwLock;
 use tokio::sync::mpsc;
 
 use tracing::info;
@@ -75,7 +75,7 @@ pub async fn start_runtime(
     tx_to_ui: mpsc::Sender<MessageToUI>,
     tx_to_rt: mpsc::Sender<MessageToRT>,
     mut rx: mpsc::Receiver<MessageToRT>,
-    settings: Arc<RwLock<Settings>>,
+    settings: Arc<TokioRwLock<Settings>>,
 ) {
     info!("Runtime started");
     let spotify_auth_client = Arc::new(TokioMutex::new(SpotifyAuthClient::new(settings.clone())));
@@ -91,7 +91,7 @@ pub async fn start_runtime(
     let poller = SpotifyPoller::new(spotify_client.clone(), settings.clone());
     tokio::spawn(poller.run(tx_to_rt.clone(), tx_to_ui.clone()));
 
-    if settings.read().unwrap().auto_auth {
+    if settings.read().await.auto_auth {
         tx_to_rt.send(MessageToRT::Authenticate).await.unwrap();
     }
 

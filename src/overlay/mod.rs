@@ -1,11 +1,10 @@
-use std::{
-    sync::{Arc, RwLock},
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 use egui::{Color32, RichText, Ui};
 use tokio::sync::mpsc;
 use tracing::trace;
+
+use tokio::sync::RwLock as TokioRwLock;
 
 mod lyrics_ui;
 mod settings_panel;
@@ -30,7 +29,7 @@ pub struct LyricsAppUI {
     time_of_last_frame: Instant,
     ms_played_since_last_update: u128,
 
-    settings: Arc<RwLock<Settings>>,
+    settings: Arc<TokioRwLock<Settings>>,
     settings_open: bool,
 }
 
@@ -39,7 +38,7 @@ impl LyricsAppUI {
         _cc: &eframe::CreationContext<'_>,
         tx: mpsc::Sender<MessageToRT>,
         rx: mpsc::Receiver<MessageToUI>,
-        settings: Arc<RwLock<Settings>>,
+        settings: Arc<TokioRwLock<Settings>>,
     ) -> Self {
         Self {
             is_auth: false,

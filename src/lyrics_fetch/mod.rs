@@ -1,11 +1,10 @@
 //! Module for fetching (cached) lyrics files for songs
 
-use std::{
-    fmt::Display,
-    sync::{Arc, RwLock},
-};
+use std::{fmt::Display, sync::Arc};
 
 use tracing::{debug, error, warn};
+
+use tokio::sync::RwLock as TokioRwLock;
 
 use thiserror::Error;
 use tracing::trace;
@@ -25,7 +24,7 @@ mod spotify;
 
 pub struct LyricsFetcher {
     client: reqwest::Client,
-    settings: Arc<RwLock<Settings>>,
+    settings: Arc<TokioRwLock<Settings>>,
 }
 
 #[derive(Error, Debug)]
@@ -44,7 +43,7 @@ pub enum LyricsFetcherErr {
 pub struct SongWithLyrics {
     pub lyrics: SongLyrics,
     duration_sec: f64,
-    track_name: String,
+    pub track_name: String,
     artist_name: String,
     album_name: String,
 }
@@ -114,7 +113,7 @@ impl LyricsRequestInfo {
 }
 
 impl LyricsFetcher {
-    pub fn new(settings: Arc<RwLock<Settings>>) -> Self {
+    pub fn new(settings: Arc<TokioRwLock<Settings>>) -> Self {
         Self {
             client: {
                 reqwest::Client::builder()
@@ -127,8 +126,8 @@ impl LyricsFetcher {
     }
 
     pub async fn get_lyrics(&self, req: LyricsRequestInfo) -> Result<Messages, RuntimeError> {
-        if self.settings.read().unwrap().caching_enabled {
-            let cache_res = self.check_cache(&req);
+        if self.settings.read().await.caching_enabled {
+            let cache_res = self.check_cache(&req).await;
             match cache_res {
                 Ok(lyrics) => {
                     return Ok(Messages::to_ui(MessageToUI::GotLyrics(
@@ -149,7 +148,7 @@ impl LyricsFetcher {
             match self.request_track_spotify(spotify_id).await {
                 Ok(parsed) => {
                     debug!("Succesfully retreived parsed spotify lyrics");
-                    let cache_store_res = self.store_in_cache(&req, None, &parsed);
+                    let cache_store_res = self.store_in_cache(&req, None, &parsed).await;
                     if let Err(cache_err) = cache_store_res {
                         error!("Failed creating cache entry: {:?}", cache_err);
                     }
@@ -172,7 +171,9 @@ impl LyricsFetcher {
         {
             Ok(lrc_response) => {
                 let parsed = parse_lrc(&lrc_response.synced_lyrics, false);
-                let cache_store_res = self.store_in_cache(&req, Some(lrc_response.id), &parsed);
+                let cache_store_res = self
+                    .store_in_cache(&req, Some(lrc_response.id), &parsed)
+                    .await;
                 if let Err(cache_err) = cache_store_res {
                     error!("Failed creating cache entry: {:?}", cache_err);
                 }

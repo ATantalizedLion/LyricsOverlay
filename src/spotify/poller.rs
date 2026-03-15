@@ -1,4 +1,5 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use tokio::sync::RwLock as TokioRwLock;
 
 use crate::{
     MessageToRT, MessageToUI,
@@ -12,17 +13,17 @@ use super::SpotifyClient;
 
 pub struct SpotifyPoller {
     client: Arc<SpotifyClient>,
-    settings: Arc<RwLock<Settings>>,
+    settings: Arc<TokioRwLock<Settings>>,
 }
 
 impl SpotifyPoller {
-    pub fn new(client: Arc<SpotifyClient>, settings: Arc<RwLock<Settings>>) -> Self {
+    pub fn new(client: Arc<SpotifyClient>, settings: Arc<TokioRwLock<Settings>>) -> Self {
         Self { client, settings }
     }
 
     pub async fn run(self, tx_rt: mpsc::Sender<MessageToRT>, tx_ui: mpsc::Sender<MessageToUI>) {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
-            self.settings.read().unwrap().poll_interval_ms,
+            self.settings.read().await.poll_interval_ms,
         ));
         loop {
             interval.tick().await;
