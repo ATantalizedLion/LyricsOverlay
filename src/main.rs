@@ -1,8 +1,8 @@
 #![warn(clippy::pedantic)]
 //TODO: allow offsetting lyrics, using arrow keys?
 //TODO: Handle unsynced lyrics, show scrollbar?
-
 //TODO: Clear lyrics on lyric fetch failure (no need for error response, maybe an empty lyric reponse with "ded")
+//TODO: add a nice little readme so the project is nice and usable by others
 
 use std::fs::{File, exists};
 use std::io::Write;

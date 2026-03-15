@@ -59,6 +59,9 @@ pub struct Settings {
     /// Time between line transitions
     #[serde(default = "default_transition_time")]
     pub line_transition_ms: u64,
+    /// Do we show debug draws or not.
+    #[serde(default = "default_bool_false")]
+    pub draw_debug_stuff: bool,
 }
 
 impl Default for Settings {
@@ -71,6 +74,7 @@ impl Default for Settings {
             dim_distant_lines: default_bool_true(),
             scroll_smoothly: default_bool_false(),
             line_transition_ms: default_transition_time(),
+            draw_debug_stuff: default_bool_false(),
             // App settings
             log_level: default_log_level(),
             caching_enabled: default_bool_true(),

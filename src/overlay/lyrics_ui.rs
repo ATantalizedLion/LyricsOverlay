@@ -31,6 +31,7 @@ impl LyricsAppUI {
         let line_spacing = binding.line_spacing;
         let font_size = binding.font_size;
         let transition_ms = binding.line_transition_ms;
+        let draw_dbg = binding.draw_debug_stuff;
         let scroll_smoothly = binding.scroll_smoothly;
         drop(binding);
 
@@ -84,9 +85,11 @@ impl LyricsAppUI {
         let base_size = font_size * 0.6;
         let highlight_size = font_size;
 
-        ui.label(format!("progress vs eased: {:.2}, {:.2}", progress, eased));
-        ui.label(format!("effective_current index: {:.2}", effective_ci));
-        ui.label(format!("current_ms: {:.2}", current_ms));
+        if draw_dbg {
+            ui.label(format!("progress vs eased: {:.2}, {:.2}", progress, eased));
+            ui.label(format!("effective_current index: {:.2}", effective_ci));
+            ui.label(format!("current_ms: {:.2}", current_ms));
+        }
 
         let slide_frac = effective_ci - effective_ci.floor();
         let slide_offset = slide_frac * row_height; // pixels to shift up
