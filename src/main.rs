@@ -3,7 +3,8 @@
 //TODO: Handle unsynced lyrics, show scrollbar?
 //TODO: Clear lyrics on lyric fetch failure (no need for error response, maybe an empty lyric reponse with "ded")
 //TODO: add a nice little readme so the project is nice and usable by others
-
+//TODO: exit button
+//TODO: fix smooth scrolling, and cleanup
 use std::fs::{File, exists};
 use std::io::Write;
 use std::sync::Arc;

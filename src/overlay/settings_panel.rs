@@ -130,6 +130,9 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
                 .text_color(Color32::from_gray(200)),
         );
     });
+    settings_row(ui, "Show debug stuff", |ui| {
+        ui.checkbox(&mut settings.draw_debug_stuff, "");
+    });
 }
 
 fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
