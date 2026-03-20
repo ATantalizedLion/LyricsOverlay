@@ -4,7 +4,12 @@
 //TODO: Clear lyrics on lyric fetch failure (no need for error response, maybe an empty lyric reponse with "ded")
 //TODO: add a nice little readme so the project is nice and usable by others
 //TODO: exit button
-//TODO: fix smooth scrolling, and cleanup
+//TODO: fix smooth scrolling, and clean it up
+//TODO: Add indication of time between final lyric and song end to lyrics
+//TODO: Fix small jumps/hiccups in progress every time a new request is received, try a low pass filter on displayed progress value
+
+//TODO: Settings for how much we change scale and color
+
 use std::fs::{File, exists};
 use std::io::Write;
 use std::sync::Arc;

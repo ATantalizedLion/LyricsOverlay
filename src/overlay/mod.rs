@@ -26,10 +26,10 @@ pub struct LyricsAppUI {
     playback_state: bool,
     current_song_with_lyrics: Option<SongWithLyrics>,
     time_of_last_req: Instant,
-    time_of_last_frame: Instant,
-    ms_played_since_last_update: u128,
 
     settings: Arc<TokioRwLock<Settings>>,
+    /// Cached settings to prevent locks
+    settings_cache: Settings,
     settings_open: bool,
 }
 
@@ -47,10 +47,9 @@ impl LyricsAppUI {
             currently_playing: None,
             error_string: None,
             time_of_last_req: Instant::now(),
-            time_of_last_frame: Instant::now(),
             current_song_with_lyrics: None,
-            ms_played_since_last_update: 0,
-            settings,
+            settings: settings.clone(),
+            settings_cache: settings.blocking_read().clone(),
             settings_open: false,
             playback_state: false,
         }
@@ -78,9 +77,8 @@ impl LyricsAppUI {
                     self.playback_state = data.is_playing.clone();
 
                     self.currently_playing = Some(data);
-                    // TODO: Also consider the time between request sent from spotify and the reeceing of the request
+                    // TODO: Also consider the time between request sent from spotify and the receiving of the request
                     self.time_of_last_req = Instant::now();
-                    self.ms_played_since_last_update = 0;
 
                     if !same_track {
                         self.tx
@@ -125,6 +123,16 @@ impl eframe::App for LyricsAppUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint();
 
+        // Stop font from being shifted for font alignment
+        ctx.tessellation_options_mut(|opts| {
+            opts.round_text_to_pixels = false;
+        });
+
+        // Cache settings if not locked.
+        if let Ok(s) = self.settings.try_read() {
+            self.settings_cache = s.clone();
+        }
+
         self.message_loop();
 
         // Transparent outer frame
@@ -145,7 +153,7 @@ impl eframe::App for LyricsAppUI {
                 // Render stuff :)
                 frame.show(ui, |ui| {
                     // Settings foldout
-                    self.settings_ui(ui);
+                    self.settings_ui(ui, ctx);
 
                     // Show either the authenticate button or lyrics
                     let auth = self.is_auth.clone();
@@ -170,7 +178,5 @@ impl eframe::App for LyricsAppUI {
                     }
                 });
             });
-
-        self.time_of_last_frame = Instant::now();
     }
 }

@@ -28,7 +28,7 @@ pub enum SpotifyClientTrackError {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-/// (Partial) Response of the currently playing song endpoint
+/// (Partial) Response of the spotify currently playing song endpoint
 pub struct CurrentlyPlayingResponse {
     /// Type of the included item, we only care if this matches "track"
     currently_playing_type: String,

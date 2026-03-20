@@ -67,7 +67,7 @@ pub async fn process_current_track_response(
                 Messages::to_ui(MessageToUI::AuthenticationStateUpdate(false)),
             ),
             SpotifyClientTrackError::BadRequest => todo!(),
-            SpotifyClientTrackError::RateLimitsExceeded => todo!(),
+            SpotifyClientTrackError::RateLimitsExceeded => todo!(), // TODO: !!! This happens sometimes apparently.
         },
     }
 }

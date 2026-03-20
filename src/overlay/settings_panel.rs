@@ -1,6 +1,6 @@
 use egui::{Color32, RichText, Ui};
 
-use crate::settings::Settings;
+use crate::settings::{ProgressBarPosition, Settings};
 
 fn section_label(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
@@ -25,7 +25,7 @@ fn settings_row(ui: &mut Ui, label: &str, widget: impl FnOnce(&mut Ui)) {
 }
 
 impl super::LyricsAppUI {
-    pub(super) fn settings_ui(&mut self, ui: &mut Ui) {
+    pub(super) fn settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             let label = if self.settings_open { "X" } else { "⚙" };
             if ui
@@ -47,53 +47,39 @@ impl super::LyricsAppUI {
             return;
         }
 
-        let mut settings = self.settings.blocking_read().clone();
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("settings_window"),
+            egui::ViewportBuilder::default()
+                .with_title("Lyrics Overlay — Settings")
+                .with_inner_size([320.0, 480.0])
+                .with_resizable(true),
+            |ctx, _class| {
+                // Close when the window's own X is clicked
+                if ctx.input(|i| i.viewport().close_requested()) {
+                    self.settings_open = false;
+                }
 
-        let snapshot = format!("{settings:?}");
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut settings = self.settings.blocking_read().clone();
+                    let snapshot = format!("{settings:?}");
 
-        let max_height = ui.available_height();
-
-        egui::Frame::new()
-            .fill(Color32::from_rgba_unmultiplied(20, 20, 30, 230))
-            .corner_radius(egui::CornerRadius::same(8))
-            .inner_margin(egui::Margin::symmetric(12, 10))
-            .stroke(egui::Stroke::new(
-                1.0,
-                Color32::from_rgba_unmultiplied(255, 255, 255, 25),
-            ))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.set_max_height(max_height);
-
-                ui.label(
-                    RichText::new("Settings")
-                        .size(13.0)
-                        .color(Color32::from_gray(200))
-                        .strong(),
-                );
-                ui.add_space(8.0);
-
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .max_height(max_height - 100.0)
-                    .show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
                         display_settings(ui, &mut settings);
                         behaviour_settings(ui, &mut settings);
                         authentication_settings(ui, &mut settings);
                     });
 
-                reset_defaults(ui, &mut settings);
-            });
+                    reset_defaults(ui, &mut settings);
 
-        // Write back and persist only on change
-        if format!("{settings:?}") != snapshot {
-            if let Err(e) = settings.save() {
-                self.error_string = Some(e);
-            }
-            *self.settings.blocking_write() = settings;
-        }
-
-        ui.add_space(4.0);
+                    if format!("{settings:?}") != snapshot {
+                        if let Err(e) = settings.save() {
+                            self.error_string = Some(e);
+                        }
+                        *self.settings.blocking_write() = settings;
+                    }
+                });
+            },
+        );
     }
 }
 
@@ -163,6 +149,19 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
             .show_ui(ui, |ui| {
                 for level in ["error", "warn", "info", "debug", "trace"] {
                     ui.selectable_value(&mut settings.log_level, level.to_string(), level);
+                }
+            });
+    });
+    settings_row(ui, "Progress bar", |ui| {
+        egui::ComboBox::from_id_salt("progress_bar_position")
+            .selected_text(settings.progress_bar_position.as_str())
+            .show_ui(ui, |ui| {
+                for pos in [
+                    ProgressBarPosition::BelowCurrentLine,
+                    ProgressBarPosition::Bottom,
+                    ProgressBarPosition::Hidden,
+                ] {
+                    ui.selectable_value(&mut settings.progress_bar_position, pos, pos.as_str());
                 }
             });
     });

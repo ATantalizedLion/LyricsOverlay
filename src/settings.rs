@@ -12,7 +12,7 @@ pub struct Settings {
     /// Port for the OAuth server
     #[serde(default = "default_port")]
     pub port: u16,
-    /// sp dc
+    /// sp dc, do not use!
     #[serde(default = "default_string")]
     pub sp_dc: String,
     /// Spotify client id
@@ -62,6 +62,9 @@ pub struct Settings {
     /// Do we show debug draws or not.
     #[serde(default = "default_bool_false")]
     pub draw_debug_stuff: bool,
+    #[serde(default = "default_progress_bar")]
+    /// progress bar position
+    pub progress_bar_position: ProgressBarPosition,
 }
 
 impl Default for Settings {
@@ -75,6 +78,7 @@ impl Default for Settings {
             scroll_smoothly: default_bool_false(),
             line_transition_ms: default_transition_time(),
             draw_debug_stuff: default_bool_false(),
+            progress_bar_position: default_progress_bar(),
             // App settings
             log_level: default_log_level(),
             caching_enabled: default_bool_true(),
@@ -136,6 +140,9 @@ fn default_poll_interval_ms() -> u64 {
 fn default_transition_time() -> u64 {
     400
 }
+fn default_progress_bar() -> ProgressBarPosition {
+    ProgressBarPosition::Bottom
+}
 
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
@@ -168,4 +175,18 @@ impl Settings {
     }
 }
 
-//TODO: Add settings value for which lyric source to use
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ProgressBarPosition {
+    Hidden,
+    BelowCurrentLine,
+    Bottom,
+}
+impl ProgressBarPosition {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::BelowCurrentLine => "Below line",
+            Self::Bottom => "Bottom",
+            Self::Hidden => "Hidden",
+        }
+    }
+}
