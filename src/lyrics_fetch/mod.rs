@@ -44,7 +44,7 @@ pub struct SongWithLyrics {
     pub lyrics: SongLyrics,
     duration_sec: f64,
     pub track_name: String,
-    artist_name: String,
+    pub artist_name: String,
     album_name: String,
 }
 
@@ -104,9 +104,10 @@ impl LyricsRequestInfo {
 
     pub fn get_track_identifier(&self) -> String {
         format!(
-            "{}-{}.{}",
-            self.track_name.clone(),
+            "{}-{} ({}) {}s",
             self.artist_name.clone(),
+            self.track_name.clone(),
+            self.album_name.clone(),
             self.duration_sec.clone()
         )
     }

@@ -17,20 +17,31 @@ use crate::{
 };
 
 pub struct LyricsAppUI {
+    /// Are we currently authenticated with spotify
     is_auth: bool,
+    /// Transimitter of communication between the UI and the runtime
     tx: mpsc::Sender<MessageToRT>,
+    /// Receiver of communication between the runtimme and the UI
     rx: mpsc::Receiver<MessageToUI>,
+    /// If this contains something, we display it so the user knows what's going on
     error_string: Option<String>,
+    /// The response to spotify's current lyrics
     currently_playing: Option<CurrentlyPlayingResponse>,
 
-    playback_state: bool,
+    /// Container for the current song's lyrics
     current_song_with_lyrics: Option<SongWithLyrics>,
+    /// Time at which the last spotify request was received
     time_of_last_req: Instant,
 
+    /// The RWLock for our setting struct
     settings: Arc<TokioRwLock<Settings>>,
-    /// Cached settings to prevent locks
+    /// Cached settings to prevent hanging on blocking locks
     settings_cache: Settings,
+    /// Is the settings window currenly open
     settings_open: bool,
+
+    /// measured y of each line, updated every frame
+    line_top_offsets: Vec<f32>,
 }
 
 impl LyricsAppUI {
@@ -51,7 +62,7 @@ impl LyricsAppUI {
             settings: settings.clone(),
             settings_cache: settings.blocking_read().clone(),
             settings_open: false,
-            playback_state: false,
+            line_top_offsets: vec![],
         }
     }
 
@@ -68,16 +79,15 @@ impl LyricsAppUI {
                             Some("Authentication expired, please reauthenticate".into())
                     }*/
                 }
-
                 MessageToUI::CurrentlyPlaying(data) => {
                     let same_track = &self
                         .currently_playing
                         .take()
                         .is_some_and(|s| s.get_spotify_id() == data.get_spotify_id());
-                    self.playback_state = data.is_playing.clone();
 
                     self.currently_playing = Some(data);
-                    // TODO: Also consider the time between request sent from spotify and the receiving of the request
+                    // TODO: Also consider the time between request sent from spotify and the receiving of the request,
+                    // there's something about this in the spotify API docs
                     self.time_of_last_req = Instant::now();
 
                     if !same_track {
@@ -89,6 +99,7 @@ impl LyricsAppUI {
                                 .unwrap(),
                             ))
                             .unwrap();
+                        self.line_top_offsets.clear();
                     }
                 }
                 MessageToUI::DisplayError(err) => self.error_string = Some(err),
@@ -98,6 +109,10 @@ impl LyricsAppUI {
                 }
                 MessageToUI::NotCurrentlyPlaying(reason) => {
                     self.error_string = Some(format!("No track found! ({reason})"))
+                }
+                MessageToUI::RateLimitsExceeded => {
+                    self.error_string = Some(format!("Rate limits exceeded"))
+                    //TODO: Do something with this
                 }
             }
         }
@@ -123,6 +138,14 @@ impl eframe::App for LyricsAppUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint();
 
+        ctx.set_visuals(egui::Visuals {
+            panel_fill: Color32::TRANSPARENT,
+            window_fill: Color32::TRANSPARENT,
+            ..egui::Visuals::dark()
+        });
+
+        let full_width = ctx.available_rect().width();
+
         // Stop font from being shifted for font alignment
         ctx.tessellation_options_mut(|opts| {
             opts.round_text_to_pixels = false;
@@ -134,6 +157,33 @@ impl eframe::App for LyricsAppUI {
         }
 
         self.message_loop();
+
+        // Exit button
+        egui::Area::new("exit".into())
+            .fixed_pos(egui::pos2(full_width - 25., 10.))
+            .show(ctx, |ui| {
+                let label = "X";
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(label)
+                                .size(14.0)
+                                .color(Color32::from_gray(160)),
+                        )
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+
+        // Settings button
+        egui::Area::new("settings_overlay".into())
+            .fixed_pos(egui::pos2(full_width - 45., 10.))
+            .show(ctx, |ui| {
+                self.settings_ui(ui, ctx);
+            });
 
         // Transparent outer frame
         let frame = egui::Frame::new()
@@ -151,10 +201,7 @@ impl eframe::App for LyricsAppUI {
                 }
 
                 // Render stuff :)
-                frame.show(ui, |ui| {
-                    // Settings foldout
-                    self.settings_ui(ui, ctx);
-
+                frame.show(ui, |ui: &mut Ui| {
                     // Show either the authenticate button or lyrics
                     let auth = self.is_auth.clone();
                     if !auth {
@@ -178,5 +225,9 @@ impl eframe::App for LyricsAppUI {
                     }
                 });
             });
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, self.settings_cache.opacity]
     }
 }

@@ -1,10 +1,10 @@
-use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, Vec2};
+use egui::{Align, Color32, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
 
 use crate::{lyrics_parser::LyricPosition, overlay::LyricsAppUI, settings::ProgressBarPosition};
 
-/// Smooth ease-in-out (cubic)
-fn ease_in_out(t: f32) -> f32 {
-    t * t * (3.0 - 2.0 * t)
+fn cubic_ease_in_out(t: f32) -> f32 {
+    //    t * t * (3.0 - 2.0 * t)
+    t // TODO: Add easing back in once we have added transition time  
 }
 
 impl LyricsAppUI {
@@ -26,24 +26,21 @@ impl LyricsAppUI {
         }
 
         ui.label(
-            RichText::new(format!("♫ {0}", song.track_name))
+            RichText::new(format!("♫ {1} - {0}", song.track_name, song.artist_name))
                 .size(11.0)
                 .color(Color32::from_gray(180)),
         );
 
-        //TODO: Currently biggest issue for smoothness: Jumping on loading or unloading lyrics
-        //      Extra problematic when line is wrapped to next like
-        //      Also problematic when new lines appear (e.g. first 3 lines)
-
-        // TODO: Fade in and not just fade out lines
-
-        //TODO: "Bottom" progress bar can clip off of screen
-
-        let row_height = &self.settings_cache.font_size + &self.settings_cache.line_spacing;
-
         let progress_ms = self.currently_playing.as_ref().map_or(0, |p| p.progress_ms);
+        let current_ms = progress_ms as u128
+            + self.currently_playing.as_ref().map_or(0, |c| {
+                if c.is_playing {
+                    self.time_of_last_req.elapsed().as_millis()
+                } else {
+                    0
+                }
+            });
 
-        let current_ms = progress_ms as u128 + self.time_of_last_req.elapsed().as_millis();
         let current_index = match song
             .lyrics
             .find_current_index(current_ms.try_into().unwrap())
@@ -54,7 +51,7 @@ impl LyricsAppUI {
         };
         let synced_lyrics = &song.lyrics.synced_lyrics;
 
-        // Progress from current line to the next.
+        // Raw progress (0..1 within current line's duration)
         let raw_progress = if current_index + 1 < synced_lyrics.len() {
             let t0 = synced_lyrics[current_index].time_ms as i64;
             let t1 = synced_lyrics[current_index + 1].time_ms as i64;
@@ -66,80 +63,99 @@ impl LyricsAppUI {
                 0.0
             }
         } else {
-            // Last line — no next line to interpolate toward,
             0.0
         };
 
-        let anim_progress = if self.settings_cache.scroll_smoothly {
-            raw_progress
+        let target_line = if self.settings_cache.scroll_smoothly {
+            current_index as f32 + cubic_ease_in_out(raw_progress)
         } else {
-            0.0
+            current_index as f32
         };
-        let eased = ease_in_out(anim_progress);
-        let effective_ci = current_index as f32 + eased;
 
-        let start = current_index.saturating_sub(2);
-        let end = (current_index + 2).min(synced_lyrics.len() - 1);
+        let available_height = ui.available_height();
+        let center_bias = available_height * 0.25 * 0.5;
+        // 0 is bottom, 0.25 is almost off screen, 0.25*0.5 is just above center.
+
+        let scroll_y = {
+            let line_floor = target_line.floor() as usize;
+            let line_frac = target_line.fract();
+            let y_floor = self
+                .line_top_offsets
+                .get(line_floor)
+                .copied()
+                .unwrap_or(0.0);
+            let y_ceil = self
+                .line_top_offsets
+                .get(line_floor + 1)
+                .copied()
+                .unwrap_or(y_floor);
+
+            // Interpolate between the two neighbouring line positions.
+            let y_exact = y_floor + (y_ceil - y_floor) * line_frac;
+            (y_exact - center_bias).max(0.0)
+        };
 
         if self.settings_cache.draw_debug_stuff {
-            ui.label(format!(
-                "progress vs eased: {:.2}, {:.2}",
-                anim_progress, eased
-            ));
-            ui.label(format!("effective_current index: {:.2}", effective_ci));
-            ui.label(format!("current_ms: {:.2}", current_ms));
+            ui.label(format!("target_line: {:.3}", target_line));
+            ui.label(format!("scroll_y: {:.1}", scroll_y));
+            ui.label(format!("current_ms: {}", current_ms));
         }
 
-        let slide_frac = effective_ci - effective_ci.floor();
-        let slide_offset = slide_frac * row_height; // pixels to shift up
+        let mut new_offsets: Vec<f32> = Vec::with_capacity(synced_lyrics.len());
+        ScrollArea::vertical()
+            .id_salt("lyrics_scroll")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .vertical_scroll_offset(scroll_y)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.add_space(center_bias);
 
-        ui.with_layout(Layout::top_down(Align::Center), |ui| {
-            let center_offset = ui.available_height() * 0.25 - row_height * 0.5;
-            ui.add_space(center_offset - slide_offset); // subtract to slide up
-            for i in start..=end {
-                let line = &synced_lyrics[i];
+                ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                    for (i, line) in synced_lyrics.iter().enumerate() {
+                        let top_y = ui.cursor().top() - ui.min_rect().top() - center_bias;
+                        new_offsets.push(top_y);
 
-                // Alpha falls off with distance
-                let edge_dist = ((i as f32 - effective_ci).abs() - 2.0).max(0.0);
-                let edge_fade = (1.0 - edge_dist).clamp(0.0, 1.0);
-                let alpha = (ease_in_out(edge_fade) * 255.0) as u8;
+                        let dist = (i as f32 - target_line).abs();
+                        let alpha_f = 0.20 + 0.80 * (1.0 - (dist / 3.5).clamp(0.0, 1.0)).powi(2);
+                        let alpha = (alpha_f * 255.0) as u8;
 
-                // Color: blend between past/present/future tints based on signed distance
-                let past_color = [200u8, 180, 255]; // purple tint
-                let current_color = [255u8, 255, 255]; // white
-                let future_color = [180u8, 210, 255]; // blue tint
+                        let signed = i as f32 - target_line;
+                        let past_color = [200u8, 180, 255];
+                        let current_color = [255u8, 255, 255];
+                        let future_color = [180u8, 210, 255];
 
-                let signed = i as f32 - effective_ci;
-                let (r, g, b) = if signed < 0.0 {
-                    // Between past and current
-                    let t = (-signed).min(1.0);
-                    lerp_color(current_color, past_color, t)
-                } else {
-                    // Between current and future
-                    let t = signed.min(1.0);
-                    lerp_color(current_color, future_color, t)
-                };
+                        let (r, g, b) = if signed < 0.0 {
+                            let t = cubic_ease_in_out((-signed).min(1.0));
+                            lerp_color(current_color, past_color, t)
+                        } else {
+                            let t = cubic_ease_in_out(signed.min(1.0));
+                            lerp_color(current_color, future_color, t)
+                        };
 
-                let color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
-                let label_resp = ui.label(
-                    RichText::new(&line.text)
-                        .size(self.settings_cache.font_size)
-                        .color(color)
-                        .strong(),
-                );
+                        let color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                        let label_resp = ui.label(
+                            RichText::new(&line.text)
+                                .size(self.settings_cache.font_size)
+                                .color(color)
+                                .strong(),
+                        );
 
-                if i == current_index
-                    && self.settings_cache.progress_bar_position
-                        == ProgressBarPosition::BelowCurrentLine
-                {
-                    ui.add_space(2.0);
-                    let bar_width = label_resp.rect.width();
-                    draw_progress_bar(ui, raw_progress, bar_width);
-                    ui.add_space(2.0);
-                }
-                ui.add_space(self.settings_cache.line_spacing);
-            }
-        });
+                        if i == current_index
+                            && self.settings_cache.progress_bar_position
+                                == ProgressBarPosition::BelowCurrentLine
+                        {
+                            ui.add_space(2.0);
+                            let bar_width = label_resp.rect.width();
+                            draw_progress_bar(ui, raw_progress, bar_width);
+                            ui.add_space(2.0);
+                        }
+
+                        ui.add_space(self.settings_cache.line_spacing);
+                    }
+                });
+            });
+
+        self.line_top_offsets = new_offsets;
 
         if self.settings_cache.progress_bar_position == ProgressBarPosition::Bottom {
             draw_progress_bar(ui, raw_progress, ui.available_width());

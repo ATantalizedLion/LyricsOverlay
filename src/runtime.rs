@@ -30,44 +30,19 @@ pub enum RuntimeError {
     GetFailed(#[from] LyricsFetcherErr),
 }
 
-/// Struct to allow handling both types of messages in a send or receive loop
+/// Struct to allow handling different types of messages in a send or receive loop
 #[derive(Debug)]
 pub struct Messages {
     to_ui: Option<MessageToUI>,
-    to_rt: Option<MessageToRT>,
 }
-
 impl Messages {
-    pub fn to_rt(to_rt: MessageToRT) -> Self {
-        Self {
-            to_ui: None,
-            to_rt: Some(to_rt),
-        }
-    }
     pub fn to_ui(to_ui: MessageToUI) -> Self {
-        Self {
-            to_ui: Some(to_ui),
-            to_rt: None,
-        }
+        Self { to_ui: Some(to_ui) }
     }
-    pub fn both(to_ui: MessageToUI, to_rt: MessageToRT) -> Self {
-        Self {
-            to_ui: Some(to_ui),
-            to_rt: Some(to_rt),
-        }
-    }
-    pub async fn send(
-        self,
-        tx_to_ui: mpsc::Sender<MessageToUI>,
-        tx_to_rt: mpsc::Sender<MessageToRT>,
-    ) {
+    pub async fn send(self, tx_to_ui: mpsc::Sender<MessageToUI>) {
         if let Some(message_ui) = self.to_ui {
             tx_to_ui.send(message_ui).await.unwrap();
         }
-
-        if let Some(message_rt) = self.to_rt {
-            tx_to_rt.send(message_rt).await.unwrap();
-        };
     }
 }
 
@@ -89,7 +64,7 @@ pub async fn start_runtime(
 
     // Spawn a thread for our spotify poller
     let poller = SpotifyPoller::new(spotify_client.clone(), settings.clone());
-    tokio::spawn(poller.run(tx_to_rt.clone(), tx_to_ui.clone()));
+    tokio::spawn(poller.run(tx_to_ui.clone()));
 
     if settings.read().await.auto_auth {
         tx_to_rt.send(MessageToRT::Authenticate).await.unwrap();
@@ -97,7 +72,6 @@ pub async fn start_runtime(
 
     while let Some(msg) = rx.recv().await {
         let tx_ui = tx_to_ui.clone();
-        let tx_rt = tx_to_rt.clone();
         let auth = spotify_auth_client.clone();
         let client = spotify_client.clone();
         let lyrics = lyrics_fetcher.clone();
@@ -115,7 +89,7 @@ pub async fn start_runtime(
 
             match res {
                 Ok(msg) => {
-                    msg.send(tx_ui, tx_rt).await;
+                    msg.send(tx_ui).await;
                 }
                 Err(x) => {
                     tx_ui

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock as TokioRwLock;
 
 use crate::{
-    MessageToRT, MessageToUI,
+    MessageToUI,
     runtime::{Messages, RuntimeError},
     settings::Settings,
     spotify::{CurrentlyPlayingResponse, SpotifyClientTrackError},
@@ -21,7 +21,7 @@ impl SpotifyPoller {
         Self { client, settings }
     }
 
-    pub async fn run(self, tx_rt: mpsc::Sender<MessageToRT>, tx_ui: mpsc::Sender<MessageToUI>) {
+    pub async fn run(self, tx_ui: mpsc::Sender<MessageToUI>) {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(
             self.settings.read().await.poll_interval_ms,
         ));
@@ -30,7 +30,7 @@ impl SpotifyPoller {
             let res = self.poll().await;
             match res {
                 Ok(msg) => {
-                    msg.send(tx_ui.clone(), tx_rt.clone()).await;
+                    msg.send(tx_ui.clone()).await;
                 }
                 Err(x) => {
                     tx_ui
@@ -67,7 +67,9 @@ pub async fn process_current_track_response(
                 Messages::to_ui(MessageToUI::AuthenticationStateUpdate(false)),
             ),
             SpotifyClientTrackError::BadRequest => todo!(),
-            SpotifyClientTrackError::RateLimitsExceeded => todo!(), // TODO: !!! This happens sometimes apparently.
+            SpotifyClientTrackError::RateLimitsExceeded => {
+                Ok(Messages::to_ui(MessageToUI::RateLimitsExceeded))
+            }
         },
     }
 }
