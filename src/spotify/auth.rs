@@ -17,9 +17,6 @@ use warp::Filter;
 
 use crate::settings::Settings;
 
-//TODO: Add dialogue to home screen for when client and secret are not yet added
-//TODO: deal with revoking of refresh tokens
-
 const SPOTIFY_AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const SPOTIFY_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 

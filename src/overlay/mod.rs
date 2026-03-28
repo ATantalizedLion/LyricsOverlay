@@ -6,15 +6,18 @@ use tracing::trace;
 
 use tokio::sync::RwLock as TokioRwLock;
 
-mod lyrics_ui;
-mod settings_panel;
-
 use crate::{
     MessageToRT, MessageToUI,
     lyrics_fetch::{LyricsRequestInfo, SongWithLyrics},
+    overlay::resize::handle_resize,
     settings::Settings,
     spotify::CurrentlyPlayingResponse,
 };
+
+mod authentication_ui;
+mod lyrics_ui;
+mod resize;
+mod settings_panel;
 
 pub struct LyricsAppUI {
     /// Are we currently authenticated with spotify
@@ -111,26 +114,10 @@ impl LyricsAppUI {
                     self.error_string = Some(format!("No track found! ({reason})"))
                 }
                 MessageToUI::RateLimitsExceeded => {
-                    self.error_string = Some(format!("Rate limits exceeded"))
-                    //TODO: Do something with this
+                    self.error_string = Some(format!("Rate limits exceeded!"))
                 }
             }
         }
-    }
-
-    fn authentication_ui(&mut self, ui: &mut Ui) {
-        ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() / 2.0 + 22.0);
-            ui.label(
-                RichText::new("♫ Lyrics Overlay")
-                    .size(22.0)
-                    .color(Color32::WHITE),
-            );
-            ui.add_space(12.0);
-            if ui.button("Connect Spotify").clicked() {
-                self.tx.try_send(MessageToRT::Authenticate).unwrap();
-            }
-        });
     }
 }
 
@@ -144,7 +131,10 @@ impl eframe::App for LyricsAppUI {
             ..egui::Visuals::dark()
         });
 
+        handle_resize(ctx, 6.0f32);
+
         let full_width = ctx.available_rect().width();
+        let full_height = ctx.available_rect().height();
 
         // Stop font from being shifted for font alignment
         ctx.tessellation_options_mut(|opts| {
@@ -185,7 +175,7 @@ impl eframe::App for LyricsAppUI {
                 self.settings_ui(ui, ctx);
             });
 
-        // Transparent outer frame
+        // Transparent outer frame, we use this for allowing dragging and resizing
         let frame = egui::Frame::new()
             .fill(Color32::from_rgba_unmultiplied(0, 0, 0, 0))
             .inner_margin(egui::Margin::symmetric(24, 16));
@@ -210,9 +200,17 @@ impl eframe::App for LyricsAppUI {
                         // Lyrics or "waiting for lyrics"
                         self.display_lyrics(ui);
                     }
+                });
+            });
 
-                    // Last received error information
-                    if let Some(err) = &self.error_string {
+        egui::Area::new("error bar".into())
+            .fixed_pos(egui::pos2(0., full_height - 20.))
+            .show(ctx, |ui| {
+                ui.set_min_width(full_width);
+                ui.set_max_width(full_width);
+                // Last received error information
+                if let Some(err) = self.error_string.clone() {
+                    ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(err)
                                 .color(Color32::from_rgb(255, 80, 80))
@@ -222,8 +220,8 @@ impl eframe::App for LyricsAppUI {
                         if ui.button("Clear Error").clicked() {
                             self.error_string = None;
                         }
-                    }
-                });
+                    });
+                }
             });
     }
 

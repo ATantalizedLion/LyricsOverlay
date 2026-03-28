@@ -5,143 +5,81 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// Host for the OAuth server
-    #[serde(default = "default_host")]
     pub host: String,
     /// Port for the OAuth server
-    #[serde(default = "default_port")]
     pub port: u16,
     /// sp dc, do not use!
-    #[serde(default = "default_string")]
     pub sp_dc: String,
     /// Spotify client id
-    #[serde(default = "default_string")]
     pub client_id: String,
     /// Spotify client secret
-    #[serde(default = "default_string")]
     pub client_secret: String,
     /// Spotify refresh token
-    #[serde(default = "default_string_none")]
     pub refresh_token: Option<String>,
     /// Spotify access token
-    #[serde(default = "default_string_none")]
     pub access_token: Option<String>,
     /// Spotify token expiry date/time
-    #[serde(default = "default_time_none")]
     pub expiry_time_as_unix: Option<u64>,
-    #[serde(default = "default_bool_true")]
+    /// Authenticate on startup
     pub auto_auth: bool,
-    #[serde(default = "default_log_level")]
+    /// Log level for all logs
     pub log_level: String,
     /// Background opacity 0.0–1.0
-    #[serde(default = "default_opacity")]
     pub opacity: f32,
     /// Font size for the active lyric line (px)
-    #[serde(default = "default_font_size")]
     pub font_size: f32,
     /// Line spacing
-    #[serde(default = "default_line_spacing")]
     pub line_spacing: f32,
-    #[serde(default = "default_bool_true")]
+    /// Do we cache found lyrics
     pub caching_enabled: bool,
-    #[serde(default = "default_cache_folder")]
+    /// Folder in which we store cached lyrics
     pub cache_folder: String,
     /// Dim lines that are far from the current line
-    #[serde(default = "default_bool_true")]
     pub dim_distant_lines: bool,
     /// How often (seconds) to poll Spotify for the current track
-    #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u64,
     /// Scroll smoothly or jump per line
-    #[serde(default = "default_bool_false")]
     pub scroll_smoothly: bool,
     /// Time between line transitions
-    #[serde(default = "default_transition_time")]
     pub line_transition_ms: u64,
     /// Do we show debug draws or not.
-    #[serde(default = "default_bool_false")]
     pub draw_debug_stuff: bool,
-    #[serde(default = "default_progress_bar")]
     /// progress bar position
-    pub progress_bar_position: ProgressBarPosition,
+    pub line_progress_bar_position: ProgressBarPosition,
+    /// song bar position
+    pub song_progress_bar_position: ProgressBarPosition,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            // Visuals
-            opacity: default_opacity(),
-            font_size: default_font_size(),
-            line_spacing: default_font_size(),
-            dim_distant_lines: default_bool_true(),
-            scroll_smoothly: default_bool_false(),
-            line_transition_ms: default_transition_time(),
-            draw_debug_stuff: default_bool_false(),
-            progress_bar_position: default_progress_bar(),
-            // App settings
-            log_level: default_log_level(),
-            caching_enabled: default_bool_true(),
-            cache_folder: default_cache_folder(),
-            poll_interval_ms: default_poll_interval_ms(),
-            // Auth settings
-            host: default_host(),
-            port: default_port(),
-            sp_dc: default_string(),
-            // Auth session
-            client_id: default_string(),
-            client_secret: default_string(),
-            auto_auth: default_bool_true(),
+            host: "127.0.0.1".into(),
+            port: 8123,
+            sp_dc: String::new(),
+            client_id: String::new(),
+            client_secret: String::new(),
             refresh_token: None,
             access_token: None,
             expiry_time_as_unix: None,
+            auto_auth: true,
+            log_level: "debug".into(),
+            opacity: 0.7,
+            font_size: 26.0,
+            line_spacing: 42.0,
+            caching_enabled: true,
+            cache_folder: "cache".into(),
+            dim_distant_lines: true,
+            poll_interval_ms: 4000,
+            scroll_smoothly: false,
+            line_transition_ms: 400,
+            draw_debug_stuff: false,
+            line_progress_bar_position: ProgressBarPosition::Hidden,
+            song_progress_bar_position: ProgressBarPosition::Hidden,
         }
     }
-}
-fn default_bool_true() -> bool {
-    true
-}
-fn default_bool_false() -> bool {
-    false
-}
-fn default_string_none() -> Option<String> {
-    None
-}
-fn default_time_none() -> Option<u64> {
-    None
-}
-fn default_string() -> String {
-    String::new()
-}
-fn default_log_level() -> String {
-    "debug".into()
-}
-fn default_cache_folder() -> String {
-    "cache".into()
-}
-fn default_opacity() -> f32 {
-    0.7
-}
-fn default_font_size() -> f32 {
-    26.0
-}
-fn default_line_spacing() -> f32 {
-    42.0
-}
-fn default_host() -> String {
-    "127.0.0.1".to_string()
-}
-fn default_port() -> u16 {
-    8123
-}
-fn default_poll_interval_ms() -> u64 {
-    4000
-}
-fn default_transition_time() -> u64 {
-    400
-}
-fn default_progress_bar() -> ProgressBarPosition {
-    ProgressBarPosition::Bottom
 }
 
 impl Settings {
@@ -175,10 +113,11 @@ impl Settings {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
 pub enum ProgressBarPosition {
     Hidden,
     BelowCurrentLine,
+    #[default]
     Bottom,
 }
 impl ProgressBarPosition {

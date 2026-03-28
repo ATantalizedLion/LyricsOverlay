@@ -42,7 +42,7 @@ pub enum LyricsFetcherErr {
 #[derive(Debug)]
 pub struct SongWithLyrics {
     pub lyrics: SongLyrics,
-    duration_sec: f64,
+    pub duration_sec: f64,
     pub track_name: String,
     pub artist_name: String,
     album_name: String,

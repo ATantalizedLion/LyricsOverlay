@@ -2,9 +2,16 @@ use egui::{Align, Color32, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
 
 use crate::{lyrics_parser::LyricPosition, overlay::LyricsAppUI, settings::ProgressBarPosition};
 
-fn cubic_ease_in_out(t: f32) -> f32 {
-    //    t * t * (3.0 - 2.0 * t)
-    t // TODO: Add easing back in once we have added transition time  
+enum EasingModes {
+    Cubic,
+    Linear,
+}
+fn ease_in_out(t: f32, mode: EasingModes) -> f32 {
+    return t; // TODO: finish integrating easing with settings
+    match mode {
+        EasingModes::Cubic => t * t * (3.0 - 2.0 * t),
+        EasingModes::Linear => t,
+    }
 }
 
 impl LyricsAppUI {
@@ -14,6 +21,7 @@ impl LyricsAppUI {
             self.waiting_for_lyrics(ui);
             return;
         };
+
         // Make sure it's not the previous song's lyrics
         if Some(song.track_name.clone())
             != self
@@ -40,34 +48,45 @@ impl LyricsAppUI {
                     0
                 }
             });
+        let synced_lyrics = &song.lyrics.synced_lyrics;
+        let song_end_ms = (song.duration_sec * 1000.) as i64;
+        let song_progress = current_ms as f32 / song_end_ms as f32;
 
-        let current_index = match song
+        let (t0, t1, current_index) = match song
             .lyrics
             .find_current_index(current_ms.try_into().unwrap())
         {
-            LyricPosition::BeforeStart => 0,
-            LyricPosition::Line(n) => n,
-            LyricPosition::AfterEnd(n) => n,
+            LyricPosition::BeforeStart => (
+                0,
+                synced_lyrics
+                    .first()
+                    .map_or(song_end_ms, |l| l.time_ms as i64),
+                0,
+            ),
+            LyricPosition::Line(n) => (
+                synced_lyrics[n].time_ms as i64,
+                synced_lyrics
+                    .get(n + 1)
+                    .map_or(song_end_ms, |l| l.time_ms as i64),
+                n,
+            ),
+            LyricPosition::AfterEnd(n) => (synced_lyrics[n - 1].time_ms as i64, song_end_ms, n),
         };
-        let synced_lyrics = &song.lyrics.synced_lyrics;
 
-        // Raw progress (0..1 within current line's duration)
-        let raw_progress = if current_index + 1 < synced_lyrics.len() {
-            let t0 = synced_lyrics[current_index].time_ms as i64;
-            let t1 = synced_lyrics[current_index + 1].time_ms as i64;
-            let elapsed = current_ms as i64 - t0;
-            let duration = t1 - t0;
-            if duration > 0 {
-                (elapsed as f32 / duration as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            }
+        let raw_progress = if t1 - t0 > 0 {
+            ((current_ms as i64 - t0) as f32 / (t1 - t0) as f32).clamp(0.0, 1.0)
         } else {
             0.0
         };
 
         let target_line = if self.settings_cache.scroll_smoothly {
-            current_index as f32 + cubic_ease_in_out(raw_progress)
+            match song
+                .lyrics
+                .find_current_index(current_ms.try_into().unwrap())
+            {
+                LyricPosition::BeforeStart => -1.0 + ease_in_out(raw_progress, EasingModes::Cubic),
+                _ => current_index as f32 + ease_in_out(raw_progress, EasingModes::Cubic),
+            }
         } else {
             current_index as f32
         };
@@ -83,7 +102,7 @@ impl LyricsAppUI {
                 .line_top_offsets
                 .get(line_floor)
                 .copied()
-                .unwrap_or(0.0);
+                .unwrap_or_else(|| self.line_top_offsets.last().copied().unwrap_or(0.0));
             let y_ceil = self
                 .line_top_offsets
                 .get(line_floor + 1)
@@ -120,15 +139,16 @@ impl LyricsAppUI {
                         let alpha = (alpha_f * 255.0) as u8;
 
                         let signed = i as f32 - target_line;
+                        // TODO: Add to settings
                         let past_color = [200u8, 180, 255];
                         let current_color = [255u8, 255, 255];
                         let future_color = [180u8, 210, 255];
 
                         let (r, g, b) = if signed < 0.0 {
-                            let t = cubic_ease_in_out((-signed).min(1.0));
+                            let t = ease_in_out((-signed).min(1.0), EasingModes::Cubic);
                             lerp_color(current_color, past_color, t)
                         } else {
-                            let t = cubic_ease_in_out(signed.min(1.0));
+                            let t = ease_in_out(signed.min(1.0), EasingModes::Cubic);
                             lerp_color(current_color, future_color, t)
                         };
 
@@ -140,14 +160,22 @@ impl LyricsAppUI {
                                 .strong(),
                         );
 
-                        if i == current_index
-                            && self.settings_cache.progress_bar_position
-                                == ProgressBarPosition::BelowCurrentLine
-                        {
-                            ui.add_space(2.0);
+                        if i == current_index {
                             let bar_width = label_resp.rect.width();
-                            draw_progress_bar(ui, raw_progress, bar_width);
-                            ui.add_space(2.0);
+                            if self.settings_cache.line_progress_bar_position
+                                == ProgressBarPosition::BelowCurrentLine
+                            {
+                                ui.add_space(2.0);
+                                draw_progress_bar(ui, raw_progress, bar_width);
+                                ui.add_space(2.0);
+                            }
+                            if self.settings_cache.song_progress_bar_position
+                                == ProgressBarPosition::BelowCurrentLine
+                            {
+                                ui.add_space(2.0);
+                                draw_progress_bar(ui, song_progress, bar_width);
+                                ui.add_space(2.0);
+                            }
                         }
 
                         ui.add_space(self.settings_cache.line_spacing);
@@ -157,8 +185,11 @@ impl LyricsAppUI {
 
         self.line_top_offsets = new_offsets;
 
-        if self.settings_cache.progress_bar_position == ProgressBarPosition::Bottom {
+        if self.settings_cache.line_progress_bar_position == ProgressBarPosition::Bottom {
             draw_progress_bar(ui, raw_progress, ui.available_width());
+        }
+        if self.settings_cache.song_progress_bar_position == ProgressBarPosition::Bottom {
+            draw_progress_bar(ui, song_progress, ui.available_width());
         }
     }
 

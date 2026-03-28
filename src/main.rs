@@ -1,12 +1,12 @@
 #![warn(clippy::pedantic)]
+//TODO: Change color change timing in scroll, start moving only when within transition time?
+//TODO: Additional progress bar for song progress
+//TODO: Settings for how much we change scale and color
+//TODO: Allow togling easing
+
+// Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
 //TODO: Handle unsynced lyrics, show scrollbar?
-//TODO: Clear lyrics on lyric fetch failure (no need for error response, maybe an empty lyric reponse with "ded")
-//TODO: add a nice little readme so the project is nice and usable by others
-//TODO: Change color change timing in scroll.
-//TODO: Add indication of time between final lyric and song end to lyrics. Same for song start.
-
-//TODO: Settings for how much we change scale and color
 
 use std::fs::{File, exists};
 use std::io::Write;
@@ -100,11 +100,10 @@ fn main() {
         }
     });
 
-    // TODO: resizable or auto calculated size
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Lyrics Overlay")
-            .with_inner_size([680.0, 340.0])
+            .with_inner_size([680.0, 340.0]) // TODO: Restore size when starting
             .with_min_inner_size([320.0, 160.0])
             .with_decorations(false) // no window chrome
             .with_transparent(true) // transparent background

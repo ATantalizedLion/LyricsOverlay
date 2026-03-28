@@ -30,7 +30,7 @@ pub enum RuntimeError {
     GetFailed(#[from] LyricsFetcherErr),
 }
 
-/// Struct to allow handling different types of messages in a send or receive loop
+/// Struct to possibly allow handling different types of messages in a send or receive loop
 #[derive(Debug)]
 pub struct Messages {
     to_ui: Option<MessageToUI>,
@@ -66,7 +66,10 @@ pub async fn start_runtime(
     let poller = SpotifyPoller::new(spotify_client.clone(), settings.clone());
     tokio::spawn(poller.run(tx_to_ui.clone()));
 
-    if settings.read().await.auto_auth {
+    if settings.read().await.auto_auth
+        && !settings.read().await.client_id.is_empty()
+        && !settings.read().await.client_secret.is_empty()
+    {
         tx_to_rt.send(MessageToRT::Authenticate).await.unwrap();
     }
 

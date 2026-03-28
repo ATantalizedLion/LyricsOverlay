@@ -1,9 +1,8 @@
 use egui::{Color32, RichText, Ui};
 
 use crate::settings::{ProgressBarPosition, Settings};
-// TODO: Separate settings and theming (basically, color presets)
-// TODO: improve text input UI
 
+// TODO: Separate settings and theming (basically, color presets), might as well separate settings and state and settings into sub-structs while we are at it.
 fn section_label(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
     ui.label(
@@ -190,18 +189,44 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
     });
     settings_row(
         ui,
-        "Progress bar",
+        "Line progress bar",
         "Shows a bar with progress/duration of current line",
         |ui| {
             egui::ComboBox::from_id_salt("progress_bar_position")
-                .selected_text(settings.progress_bar_position.as_str())
+                .selected_text(settings.line_progress_bar_position.as_str())
                 .show_ui(ui, |ui| {
                     for pos in [
                         ProgressBarPosition::BelowCurrentLine,
                         ProgressBarPosition::Bottom,
                         ProgressBarPosition::Hidden,
                     ] {
-                        ui.selectable_value(&mut settings.progress_bar_position, pos, pos.as_str());
+                        ui.selectable_value(
+                            &mut settings.line_progress_bar_position,
+                            pos,
+                            pos.as_str(),
+                        );
+                    }
+                });
+        },
+    );
+    settings_row(
+        ui,
+        "Song progress bar",
+        "Shows a bar with progress/duration of current song",
+        |ui| {
+            egui::ComboBox::from_id_salt("song_progress_bar_position")
+                .selected_text(settings.song_progress_bar_position.as_str())
+                .show_ui(ui, |ui| {
+                    for pos in [
+                        ProgressBarPosition::BelowCurrentLine,
+                        ProgressBarPosition::Bottom,
+                        ProgressBarPosition::Hidden,
+                    ] {
+                        ui.selectable_value(
+                            &mut settings.song_progress_bar_position,
+                            pos,
+                            pos.as_str(),
+                        );
                     }
                 });
         },
