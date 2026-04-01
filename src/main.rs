@@ -115,14 +115,7 @@ fn main() {
     _ = eframe::run_native(
         "Lyrics overlay",
         options,
-        Box::new(|cc| {
-            Ok(Box::new(LyricsAppUI::new(
-                cc,
-                to_rt,
-                ui_rx,
-                Arc::clone(&rw_settings),
-            )))
-        }),
+        Box::new(|cc| Ok(Box::new(LyricsAppUI::new(cc, to_rt, ui_rx, &rw_settings)))),
     );
 
     debug!("Post-Eframe run native log");

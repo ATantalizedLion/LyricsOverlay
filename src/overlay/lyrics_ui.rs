@@ -1,20 +1,24 @@
 use egui::{Align, Color32, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
 
-use crate::{lyrics_parser::LyricPosition, overlay::LyricsAppUI, settings::ProgressBarPosition};
-
-enum EasingModes {
-    Cubic,
-    Linear,
-}
+use crate::{
+    lyrics_parser::LyricPosition,
+    overlay::LyricsAppUI,
+    settings::{EasingModes, ProgressBarPosition},
+    spotify::CurrentlyPlayingResponse,
+};
 fn ease_in_out(t: f32, mode: EasingModes) -> f32 {
-    return t; // TODO: finish integrating easing with settings
     match mode {
         EasingModes::Cubic => t * t * (3.0 - 2.0 * t),
         EasingModes::Linear => t,
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_sign_loss)]
 impl LyricsAppUI {
+    // TODO: Split into smaller functions
     pub(super) fn display_lyrics(&mut self, ui: &mut Ui) {
         // Do we have lyrics
         let Some(song) = &self.current_song_with_lyrics else {
@@ -27,7 +31,7 @@ impl LyricsAppUI {
             != self
                 .currently_playing
                 .as_ref()
-                .map_or(None, |p| p.get_track_title())
+                .and_then(CurrentlyPlayingResponse::get_track_title)
         {
             self.waiting_for_lyrics(ui);
             return;
@@ -84,8 +88,13 @@ impl LyricsAppUI {
                 .lyrics
                 .find_current_index(current_ms.try_into().unwrap())
             {
-                LyricPosition::BeforeStart => -1.0 + ease_in_out(raw_progress, EasingModes::Cubic),
-                _ => current_index as f32 + ease_in_out(raw_progress, EasingModes::Cubic),
+                LyricPosition::BeforeStart => {
+                    -1.0 + ease_in_out(raw_progress, self.settings_cache.ease_position)
+                }
+                _ => {
+                    current_index as f32
+                        + ease_in_out(raw_progress, self.settings_cache.ease_position)
+                }
             }
         } else {
             current_index as f32
@@ -115,9 +124,9 @@ impl LyricsAppUI {
         };
 
         if self.settings_cache.draw_debug_stuff {
-            ui.label(format!("target_line: {:.3}", target_line));
-            ui.label(format!("scroll_y: {:.1}", scroll_y));
-            ui.label(format!("current_ms: {}", current_ms));
+            ui.label(format!("target_line: {target_line:.3}"));
+            ui.label(format!("scroll_y: {scroll_y:.1}"));
+            ui.label(format!("current_ms: {current_ms}"));
         }
 
         let mut new_offsets: Vec<f32> = Vec::with_capacity(synced_lyrics.len());
@@ -145,10 +154,10 @@ impl LyricsAppUI {
                         let future_color = [180u8, 210, 255];
 
                         let (r, g, b) = if signed < 0.0 {
-                            let t = ease_in_out((-signed).min(1.0), EasingModes::Cubic);
+                            let t = ease_in_out((-signed).min(1.0), self.settings_cache.ease_color);
                             lerp_color(current_color, past_color, t)
                         } else {
-                            let t = ease_in_out(signed.min(1.0), EasingModes::Cubic);
+                            let t = ease_in_out(signed.min(1.0), self.settings_cache.ease_color);
                             lerp_color(current_color, future_color, t)
                         };
 
@@ -214,8 +223,10 @@ impl LyricsAppUI {
 }
 
 /// Helper for nearly lerping between two colors
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
 fn lerp_color(a: [u8; 3], b: [u8; 3], t: f32) -> (u8, u8, u8) {
-    let l = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+    let l = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
     (l(a[0], b[0]), l(a[1], b[1]), l(a[2], b[2]))
 }
 

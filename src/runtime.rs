@@ -100,7 +100,7 @@ pub async fn start_runtime(
                         .await
                         .unwrap();
                 }
-            };
+            }
         });
     }
     trace!("Reached end of runtime");

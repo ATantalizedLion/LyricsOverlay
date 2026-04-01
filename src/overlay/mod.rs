@@ -36,7 +36,7 @@ pub struct LyricsAppUI {
     /// Time at which the last spotify request was received
     time_of_last_req: Instant,
 
-    /// The RWLock for our setting struct
+    /// The `RWLock` for our setting struct
     settings: Arc<TokioRwLock<Settings>>,
     /// Cached settings to prevent hanging on blocking locks
     settings_cache: Settings,
@@ -52,7 +52,7 @@ impl LyricsAppUI {
         _cc: &eframe::CreationContext<'_>,
         tx: mpsc::Sender<MessageToRT>,
         rx: mpsc::Receiver<MessageToUI>,
-        settings: Arc<TokioRwLock<Settings>>,
+        settings: &Arc<TokioRwLock<Settings>>,
     ) -> Self {
         Self {
             is_auth: false,
@@ -111,10 +111,10 @@ impl LyricsAppUI {
                     self.current_song_with_lyrics = Some(song);
                 }
                 MessageToUI::NotCurrentlyPlaying(reason) => {
-                    self.error_string = Some(format!("No track found! ({reason})"))
+                    self.error_string = Some(format!("No track found! ({reason})"));
                 }
                 MessageToUI::RateLimitsExceeded => {
-                    self.error_string = Some(format!("Rate limits exceeded!"))
+                    self.error_string = Some("Rate limits exceeded!".to_string());
                 }
             }
         }
@@ -193,12 +193,11 @@ impl eframe::App for LyricsAppUI {
                 // Render stuff :)
                 frame.show(ui, |ui: &mut Ui| {
                     // Show either the authenticate button or lyrics
-                    let auth = self.is_auth.clone();
-                    if !auth {
-                        self.authentication_ui(ui);
-                    } else {
+                    if self.is_auth {
                         // Lyrics or "waiting for lyrics"
                         self.display_lyrics(ui);
+                    } else {
+                        self.authentication_ui(ui);
                     }
                 });
             });

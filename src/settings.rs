@@ -4,6 +4,8 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
+//TODO Split settings into multiple sub-structs
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -51,6 +53,10 @@ pub struct Settings {
     pub line_progress_bar_position: ProgressBarPosition,
     /// song bar position
     pub song_progress_bar_position: ProgressBarPosition,
+    /// easing of the position while playing
+    pub ease_position: EasingModes,
+    /// easing of the color while playing
+    pub ease_color: EasingModes,
 }
 
 impl Default for Settings {
@@ -78,6 +84,8 @@ impl Default for Settings {
             draw_debug_stuff: false,
             line_progress_bar_position: ProgressBarPosition::Hidden,
             song_progress_bar_position: ProgressBarPosition::Hidden,
+            ease_position: EasingModes::Linear,
+            ease_color: EasingModes::Cubic,
         }
     }
 }
@@ -121,11 +129,26 @@ pub enum ProgressBarPosition {
     Bottom,
 }
 impl ProgressBarPosition {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::BelowCurrentLine => "Below line",
             Self::Bottom => "Bottom",
             Self::Hidden => "Hidden",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum EasingModes {
+    Cubic,
+    #[default]
+    Linear,
+}
+impl EasingModes {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cubic => "Cubic",
+            Self::Linear => "Linear",
         }
     }
 }

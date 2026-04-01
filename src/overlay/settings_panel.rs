@@ -1,6 +1,6 @@
 use egui::{Color32, RichText, Ui};
 
-use crate::settings::{ProgressBarPosition, Settings};
+use crate::settings::{EasingModes, ProgressBarPosition, Settings};
 
 // TODO: Separate settings and theming (basically, color presets), might as well separate settings and state and settings into sub-structs while we are at it.
 fn section_label(ui: &mut Ui, text: &str) {
@@ -136,7 +136,7 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
             ui.add(
                 egui::Slider::new(&mut settings.line_transition_ms, 0..=1000)
                     .step_by(10.0)
-                    .custom_formatter(|v, _| format!("{}ms", v))
+                    .custom_formatter(|v, _| format!("{v}ms"))
                     .text_color(Color32::from_gray(200)),
             );
         },
@@ -146,6 +146,7 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     });
 }
 
+// TODO split ProgressBarPosition and Easing to separate functions for cleaner
 fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
     section_label(ui, "Behaviour");
 
@@ -231,6 +232,26 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
                 });
         },
     );
+
+    settings_row(ui, "Position easing", "Ease position?", |ui| {
+        egui::ComboBox::from_id_salt("position_ease")
+            .selected_text(settings.ease_position.as_str())
+            .show_ui(ui, |ui| {
+                for mode in [EasingModes::Cubic, EasingModes::Linear] {
+                    ui.selectable_value(&mut settings.ease_position, mode, mode.as_str());
+                }
+            });
+    });
+
+    settings_row(ui, "Color easing", "Ease color?", |ui| {
+        egui::ComboBox::from_id_salt("color_ease")
+            .selected_text(settings.ease_color.as_str())
+            .show_ui(ui, |ui| {
+                for mode in [EasingModes::Cubic, EasingModes::Linear] {
+                    ui.selectable_value(&mut settings.ease_color, mode, mode.as_str());
+                }
+            });
+    });
 }
 
 fn authentication_settings(ui: &mut Ui, settings: &mut Settings) {

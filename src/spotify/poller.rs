@@ -39,7 +39,7 @@ impl SpotifyPoller {
                         .await
                         .unwrap();
                 }
-            };
+            }
         }
     }
 

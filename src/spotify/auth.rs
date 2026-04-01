@@ -70,6 +70,7 @@ impl SpotifyAuthClient {
         }
     }
 
+    //TODO: Reduce lines
     pub async fn authenticate(&mut self) -> Result<(), SpotifyClientAuthError> {
         let (
             client_id,
@@ -86,7 +87,7 @@ impl SpotifyAuthClient {
                 settings_lock.redirect_url(),
                 settings_lock.refresh_token.clone(),
                 settings_lock.access_token.clone(),
-                settings_lock.expiry_time_as_unix.clone(),
+                settings_lock.expiry_time_as_unix,
             )
         };
 
@@ -101,12 +102,11 @@ impl SpotifyAuthClient {
                 let mut token_guard = self.access_token.write().await;
                 *token_guard = Some(a_token);
                 return Ok(());
-            } else {
-                debug!(
-                    "Stored access token expired {} secs ago",
-                    get_unix_time() - exp
-                );
             }
+            debug!(
+                "Stored access token expired {} secs ago",
+                get_unix_time() - exp
+            );
         }
 
         if saved_refresh.clone().is_some_and(|x| !x.is_empty()) {
@@ -276,7 +276,7 @@ impl SpotifyAuthClient {
 
         let mut token_guard = self.access_token.write().await;
         *token_guard = Some(token_result.access_token().secret().clone());
-        rw_settings.access_token = token_guard.clone();
+        rw_settings.access_token.clone_from(&token_guard);
 
         if let Some(new_refresh) = token_result.refresh_token() {
             let mut refresh_guard = self.refresh_token.write().await;
