@@ -20,7 +20,16 @@ tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 egui = "0.33.3"
-eframe = "0.33.3"
+# wgpu backend required for the egui-winit patch below (WS_EX_NOREDIRECTIONBITMAP only
+# matters for a DXGI/wgpu swapchain, not glow/WGL).
+eframe = { version = "0.33.3", features = ["wgpu"] }
 hmac = "0.12.1"
 sha1 = "0.10.6"
+
+# TODO: Remove this patch (and vendor/egui-winit-0.33.3) once emilk/egui#8116 lands in a
+# released eframe/egui-winit version. Upstream doesn't set WS_EX_NOREDIRECTIONBITMAP for
+# transparent windows, so on Windows the wgpu backend renders opaque - alpha < 1 blends
+# toward solid white instead of the desktop behind the window. See vendor/README.md.
+[patch.crates-io]
+egui-winit = { path = "vendor/egui-winit-0.33.3" }
 

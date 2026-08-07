@@ -109,6 +109,7 @@ fn main() {
             .with_transparent(true) // transparent background
             .with_always_on_top()
             .with_resizable(true),
+        renderer: eframe::Renderer::Wgpu, // EXPERIMENT: see egui-winit patch in vendor/
         ..Default::default()
     };
 
