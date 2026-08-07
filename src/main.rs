@@ -1,12 +1,19 @@
 #![warn(clippy::pedantic)]
+// Suppress the console window on Windows for release builds
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //TODO: Change color change timing in scroll, start moving only when within transition time?
 //TODO: Additional progress bar for song progress
 //TODO: Settings for how much we change scale and color
-//TODO: Allow togling easing
+//TODO: Allow togling easing, use of transition time
+//TODO: Make settings window match main window looks
+//TODO: More obvious color for debug prints
 
 // Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
-//TODO: Handle unsynced lyrics, show scrollbar?
+//TODO: Improved handling of unsynced lyrics, show scrollbar?
+//TODO: Logo?
+//TODO: Theming/Presets?
 
 use std::fs::{File, exists};
 use std::io::Write;
