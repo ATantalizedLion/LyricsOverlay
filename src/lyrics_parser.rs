@@ -6,7 +6,7 @@ pub struct LyricLine {
     pub text: String,
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum LyricPosition {
     BeforeStart,
     Line(usize),

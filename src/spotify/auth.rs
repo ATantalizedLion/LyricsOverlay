@@ -70,7 +70,6 @@ impl SpotifyAuthClient {
         }
     }
 
-    //TODO: Reduce lines
     pub async fn authenticate(&mut self) -> Result<(), SpotifyClientAuthError> {
         let (
             client_id,
@@ -147,51 +146,7 @@ impl SpotifyAuthClient {
         let host = url.host_str().expect("Missing host").to_owned();
         let port = url.port().expect("Missing port");
 
-        let (code, state) = tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            let (tx_content, rx_content) = oneshot::channel::<(Option<String>, Option<String>)>();
-            let tx_content_mutex = Arc::new(Mutex::new(Some(tx_content)));
-            let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let tx_shutdown_mutex = Arc::new(Mutex::new(Some(tx_shutdown)));
-
-            let callback_route = warp::path("callback")
-                .and(warp::query::<std::collections::HashMap<String, String>>())
-                .map(move |params: std::collections::HashMap<String, String>| {
-                    let code = params.get("code").cloned();
-                    let state = params.get("state").cloned();
-                    if let Some(tx_inner) = tx_content_mutex.lock().unwrap().take() {
-                        trace!("Sending code and state");
-                        tx_inner.send((code, state)).unwrap();
-                    }
-                    if let Some(tx_shutdown_inner) = tx_shutdown_mutex.lock().unwrap().take() {
-                        trace!("Sending shutdown!");
-                        tx_shutdown_inner.send(()).unwrap();
-                    }
-                    warp::reply::html(
-                        "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>".to_string()
-                    )
-                });
-
-            let addr: SocketAddr = format!("{host}:{port}").parse().expect("Invalid socket address");
-          warp::serve(callback_route)
-            .bind(addr)
-            .await
-            .graceful(async move {
-                rx_shutdown.await.unwrap();
-                trace!("Server shutdown received");
-            })
-            .run()
-            .await;
-
-            rx_content.await.unwrap()
-        })
-    })
-    .await
-    .unwrap();
+        let (code, state) = await_auth_callback(host, port).await;
 
         let Some(code) = code else {
             return Err(SpotifyClientAuthError::MissingCodeAuthError);
@@ -293,6 +248,56 @@ impl SpotifyAuthClient {
 
         rw_settings.save().unwrap();
     }
+}
+
+/// Runs a local warp server on its own single-threaded runtime, and waits for
+/// spotify to redirect back to it with the auth code and CSRF state.
+async fn await_auth_callback(host: String, port: u16) -> (Option<String>, Option<String>) {
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let (tx_content, rx_content) = oneshot::channel::<(Option<String>, Option<String>)>();
+            let tx_content_mutex = Arc::new(Mutex::new(Some(tx_content)));
+            let (tx_shutdown, rx_shutdown) = oneshot::channel();
+            let tx_shutdown_mutex = Arc::new(Mutex::new(Some(tx_shutdown)));
+
+            let callback_route = warp::path("callback")
+                .and(warp::query::<std::collections::HashMap<String, String>>())
+                .map(move |params: std::collections::HashMap<String, String>| {
+                    let code = params.get("code").cloned();
+                    let state = params.get("state").cloned();
+                    if let Some(tx_inner) = tx_content_mutex.lock().unwrap().take() {
+                        trace!("Sending code and state");
+                        tx_inner.send((code, state)).unwrap();
+                    }
+                    if let Some(tx_shutdown_inner) = tx_shutdown_mutex.lock().unwrap().take() {
+                        trace!("Sending shutdown!");
+                        tx_shutdown_inner.send(()).unwrap();
+                    }
+                    warp::reply::html(
+                        "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>".to_string()
+                    )
+                });
+
+            let addr: SocketAddr = format!("{host}:{port}").parse().expect("Invalid socket address");
+            warp::serve(callback_route)
+                .bind(addr)
+                .await
+                .graceful(async move {
+                    rx_shutdown.await.unwrap();
+                    trace!("Server shutdown received");
+                })
+                .run()
+                .await;
+
+            rx_content.await.unwrap()
+        })
+    })
+    .await
+    .unwrap()
 }
 
 fn get_unix_time() -> u64 {

@@ -88,10 +88,8 @@ impl LyricsAppUI {
                         .take()
                         .is_some_and(|s| s.get_spotify_id() == data.get_spotify_id());
 
+                    self.time_of_last_req = data.measured_at;
                     self.currently_playing = Some(data);
-                    // TODO: Also consider the time between request sent from spotify and the receiving of the request,
-                    // there's something about this in the spotify API docs
-                    self.time_of_last_req = Instant::now();
 
                     if !same_track {
                         self.tx

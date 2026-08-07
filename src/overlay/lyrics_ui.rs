@@ -1,7 +1,8 @@
 use egui::{Align, Color32, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
 
 use crate::{
-    lyrics_parser::LyricPosition,
+    lyrics_fetch::SongWithLyrics,
+    lyrics_parser::{LyricLine, LyricPosition},
     overlay::LyricsAppUI,
     settings::{EasingModes, ProgressBarPosition},
     spotify::CurrentlyPlayingResponse,
@@ -18,7 +19,6 @@ fn ease_in_out(t: f32, mode: EasingModes) -> f32 {
 #[allow(clippy::cast_precision_loss)]
 #[allow(clippy::cast_sign_loss)]
 impl LyricsAppUI {
-    // TODO: Split into smaller functions
     pub(super) fn display_lyrics(&mut self, ui: &mut Ui) {
         // Do we have lyrics
         let Some(song) = &self.current_song_with_lyrics else {
@@ -37,98 +37,149 @@ impl LyricsAppUI {
             return;
         }
 
-        ui.label(
-            RichText::new(format!("♫ {1} - {0}", song.track_name, song.artist_name))
-                .size(11.0)
-                .color(Color32::from_gray(180)),
-        );
+        draw_song_header(ui, song);
 
-        let progress_ms = self.currently_playing.as_ref().map_or(0, |p| p.progress_ms);
-        let current_ms = progress_ms as u128
-            + self.currently_playing.as_ref().map_or(0, |c| {
-                if c.is_playing {
-                    self.time_of_last_req.elapsed().as_millis()
-                } else {
-                    0
-                }
-            });
+        let current_ms = self.current_playback_ms();
         let synced_lyrics = &song.lyrics.synced_lyrics;
         let song_end_ms = (song.duration_sec * 1000.) as i64;
         let song_progress = current_ms as f32 / song_end_ms as f32;
 
-        let (t0, t1, current_index) = match song
+        let position = song
             .lyrics
-            .find_current_index(current_ms.try_into().unwrap())
-        {
-            LyricPosition::BeforeStart => (
-                0,
-                synced_lyrics
-                    .first()
-                    .map_or(song_end_ms, |l| l.time_ms as i64),
-                0,
-            ),
-            LyricPosition::Line(n) => (
-                synced_lyrics[n].time_ms as i64,
-                synced_lyrics
-                    .get(n + 1)
-                    .map_or(song_end_ms, |l| l.time_ms as i64),
-                n,
-            ),
-            LyricPosition::AfterEnd(n) => (synced_lyrics[n - 1].time_ms as i64, song_end_ms, n),
-        };
+            .find_current_index(current_ms.try_into().unwrap());
+        let (t0, t1, current_index) = line_bounds(position, synced_lyrics, song_end_ms);
+        let (raw_progress, target_line) =
+            self.compute_target_line(position, current_ms, t0, t1, current_index);
 
+        let available_height = ui.available_height();
+        let (scroll_y, center_bias) = self.compute_scroll_offset(target_line, available_height);
+
+        self.draw_debug_info(ui, target_line, scroll_y, current_ms);
+
+        let new_offsets = self.draw_lyric_lines(
+            ui,
+            synced_lyrics,
+            scroll_y,
+            center_bias,
+            target_line,
+            current_index,
+            raw_progress,
+            song_progress,
+        );
+        self.line_top_offsets = new_offsets;
+
+        if self.settings_cache.line_progress_bar_position == ProgressBarPosition::Bottom {
+            draw_progress_bar(ui, raw_progress, ui.available_width());
+        }
+        if self.settings_cache.song_progress_bar_position == ProgressBarPosition::Bottom {
+            draw_progress_bar(ui, song_progress, ui.available_width());
+        }
+    }
+
+    /// Estimated current playback position, extrapolated from the last poll response.
+    fn current_playback_ms(&self) -> u128 {
+        let Some(playing) = self.currently_playing.as_ref() else {
+            return 0;
+        };
+        let elapsed = if playing.is_playing {
+            self.time_of_last_req.elapsed().as_millis()
+        } else {
+            0
+        };
+        playing.progress_ms as u128 + elapsed
+    }
+
+    /// Where the scroll/color transition should be, and how far through the
+    /// current line's own progress bar we are.
+    fn compute_target_line(
+        &self,
+        position: LyricPosition,
+        current_ms: u128,
+        t0: i64,
+        t1: i64,
+        current_index: usize,
+    ) -> (f32, f32) {
         let raw_progress = if t1 - t0 > 0 {
             ((current_ms as i64 - t0) as f32 / (t1 - t0) as f32).clamp(0.0, 1.0)
         } else {
             0.0
         };
 
+        // Snap into place over `line_transition_ms`, then hold, rather than
+        // smearing the transition across the whole (possibly long) gap to the next line.
+        let transition_progress = {
+            let span = (t1 - t0)
+                .min(self.settings_cache.line_transition_ms as i64)
+                .max(1);
+            ((current_ms as i64 - t0) as f32 / span as f32).clamp(0.0, 1.0)
+        };
+
         let target_line = if self.settings_cache.scroll_smoothly {
-            match song
-                .lyrics
-                .find_current_index(current_ms.try_into().unwrap())
-            {
-                LyricPosition::BeforeStart => {
-                    -1.0 + ease_in_out(raw_progress, self.settings_cache.ease_position)
-                }
+            match position {
+                // Nothing to transition from yet, hold off-screen until the first line's
+                // own transition (handled below) eases it into view.
+                LyricPosition::BeforeStart => -1.0,
                 _ => {
-                    current_index as f32
-                        + ease_in_out(raw_progress, self.settings_cache.ease_position)
+                    current_index as f32 - 1.0
+                        + ease_in_out(transition_progress, self.settings_cache.ease_position)
                 }
             }
         } else {
             current_index as f32
         };
 
-        let available_height = ui.available_height();
-        let center_bias = available_height * 0.25 * 0.5;
+        (raw_progress, target_line)
+    }
+
+    /// Vertical scroll offset that centers `target_line`, plus the bias used to
+    /// keep the current line just above dead-center.
+    fn compute_scroll_offset(&self, target_line: f32, available_height: f32) -> (f32, f32) {
         // 0 is bottom, 0.25 is almost off screen, 0.25*0.5 is just above center.
+        let center_bias = available_height * 0.25 * 0.5;
 
-        let scroll_y = {
-            let line_floor = target_line.floor() as usize;
-            let line_frac = target_line.fract();
-            let y_floor = self
-                .line_top_offsets
-                .get(line_floor)
-                .copied()
-                .unwrap_or_else(|| self.line_top_offsets.last().copied().unwrap_or(0.0));
-            let y_ceil = self
-                .line_top_offsets
-                .get(line_floor + 1)
-                .copied()
-                .unwrap_or(y_floor);
+        let line_floor = target_line.floor() as usize;
+        let line_frac = target_line.fract();
+        let y_floor = self
+            .line_top_offsets
+            .get(line_floor)
+            .copied()
+            .unwrap_or_else(|| self.line_top_offsets.last().copied().unwrap_or(0.0));
+        let y_ceil = self
+            .line_top_offsets
+            .get(line_floor + 1)
+            .copied()
+            .unwrap_or(y_floor);
 
-            // Interpolate between the two neighbouring line positions.
-            let y_exact = y_floor + (y_ceil - y_floor) * line_frac;
-            (y_exact - center_bias).max(0.0)
-        };
+        // Interpolate between the two neighbouring line positions.
+        let y_exact = y_floor + (y_ceil - y_floor) * line_frac;
+        let scroll_y = (y_exact - center_bias).max(0.0);
 
-        if self.settings_cache.draw_debug_stuff {
-            ui.label(format!("target_line: {target_line:.3}"));
-            ui.label(format!("scroll_y: {scroll_y:.1}"));
-            ui.label(format!("current_ms: {current_ms}"));
+        (scroll_y, center_bias)
+    }
+
+    fn draw_debug_info(&self, ui: &mut Ui, target_line: f32, scroll_y: f32, current_ms: u128) {
+        if !self.settings_cache.draw_debug_stuff {
+            return;
         }
+        ui.label(format!("target_line: {target_line:.3}"));
+        ui.label(format!("scroll_y: {scroll_y:.1}"));
+        ui.label(format!("current_ms: {current_ms}"));
+    }
 
+    /// Draws the scrolling lyric lines and returns each line's measured top offset,
+    /// to be cached for next frame's scroll-position interpolation.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_lyric_lines(
+        &self,
+        ui: &mut Ui,
+        synced_lyrics: &[LyricLine],
+        scroll_y: f32,
+        center_bias: f32,
+        target_line: f32,
+        current_index: usize,
+        raw_progress: f32,
+        song_progress: f32,
+    ) -> Vec<f32> {
         let mut new_offsets: Vec<f32> = Vec::with_capacity(synced_lyrics.len());
         ScrollArea::vertical()
             .id_salt("lyrics_scroll")
@@ -192,14 +243,7 @@ impl LyricsAppUI {
                 });
             });
 
-        self.line_top_offsets = new_offsets;
-
-        if self.settings_cache.line_progress_bar_position == ProgressBarPosition::Bottom {
-            draw_progress_bar(ui, raw_progress, ui.available_width());
-        }
-        if self.settings_cache.song_progress_bar_position == ProgressBarPosition::Bottom {
-            draw_progress_bar(ui, song_progress, ui.available_width());
-        }
+        new_offsets
     }
 
     fn waiting_for_lyrics(&mut self, ui: &mut Ui) {
@@ -219,6 +263,40 @@ impl LyricsAppUI {
                     .color(Color32::from_gray(100)),
             );
         });
+    }
+}
+
+fn draw_song_header(ui: &mut Ui, song: &SongWithLyrics) {
+    ui.label(
+        RichText::new(format!("♫ {} - {}", song.artist_name, song.track_name))
+            .size(11.0)
+            .color(Color32::from_gray(180)),
+    );
+}
+
+/// Start/end time (ms) of the line `position` refers to, and its line index.
+#[allow(clippy::cast_possible_wrap)]
+fn line_bounds(
+    position: LyricPosition,
+    synced_lyrics: &[LyricLine],
+    song_end_ms: i64,
+) -> (i64, i64, usize) {
+    match position {
+        LyricPosition::BeforeStart => (
+            0,
+            synced_lyrics
+                .first()
+                .map_or(song_end_ms, |l| l.time_ms as i64),
+            0,
+        ),
+        LyricPosition::Line(n) => (
+            synced_lyrics[n].time_ms as i64,
+            synced_lyrics
+                .get(n + 1)
+                .map_or(song_end_ms, |l| l.time_ms as i64),
+            n,
+        ),
+        LyricPosition::AfterEnd(n) => (synced_lyrics[n - 1].time_ms as i64, song_end_ms, n),
     }
 }
 

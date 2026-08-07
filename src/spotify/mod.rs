@@ -1,6 +1,7 @@
 //! Module for talking with spotify, implements only the parts of the API needed for this app
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::trace;
@@ -38,6 +39,10 @@ pub struct CurrentlyPlayingResponse {
     pub is_playing: bool,
     /// Playback progress
     pub progress_ms: usize,
+    /// Instant at which `progress_ms` was accurate, compensated for request round-trip
+    /// latency (set in `SpotifyClient::get_current_track`, not part of the API response).
+    #[serde(skip, default = "Instant::now")]
+    pub measured_at: Instant,
 }
 
 impl CurrentlyPlayingResponse {
@@ -127,6 +132,7 @@ impl SpotifyClient {
             return Err(SpotifyClientTrackError::NotAuthenticated);
         };
 
+        let request_sent = Instant::now();
         let response: reqwest::Response = self
             .client
             .get("https://api.spotify.com/v1/me/player/currently-playing")
@@ -153,7 +159,14 @@ impl SpotifyClient {
             return Err(SpotifyClientTrackError::RateLimitsExceeded);
         }
 
-        let playing: CurrentlyPlayingResponse = response.json().await?;
+        let mut playing: CurrentlyPlayingResponse = response.json().await?;
+
+        // Spotify measured `progress_ms` roughly when it received our request, i.e. about
+        // halfway through the round trip - not when we finished receiving the response.
+        let round_trip = request_sent.elapsed();
+        playing.measured_at = Instant::now()
+            .checked_sub(round_trip / 2)
+            .unwrap_or_else(Instant::now);
 
         trace!("CurrentlyPlayingResponse {playing:?}");
 

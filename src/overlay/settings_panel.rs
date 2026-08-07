@@ -146,7 +146,6 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     });
 }
 
-// TODO split ProgressBarPosition and Easing to separate functions for cleaner
 fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
     section_label(ui, "Behaviour");
 
@@ -188,6 +187,12 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
                 }
             });
     });
+
+    progress_bar_settings(ui, settings);
+    easing_settings(ui, settings);
+}
+
+fn progress_bar_settings(ui: &mut Ui, settings: &mut Settings) {
     settings_row(
         ui,
         "Line progress bar",
@@ -232,7 +237,9 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
                 });
         },
     );
+}
 
+fn easing_settings(ui: &mut Ui, settings: &mut Settings) {
     settings_row(ui, "Position easing", "Ease position?", |ui| {
         egui::ComboBox::from_id_salt("position_ease")
             .selected_text(settings.ease_position.as_str())
