@@ -1,6 +1,7 @@
 use egui::{Color32, RichText, Ui};
 
-use crate::settings::{EasingModes, ProgressBarPosition, Settings};
+use crate::overlay::resize::handle_resize;
+use crate::settings::{EasingModes, MediaControlsPosition, ProgressBarPosition, Settings};
 
 // TODO: Separate settings and theming (basically, color presets), might as well separate settings and state and settings into sub-structs while we are at it.
 fn section_label(ui: &mut Ui, text: &str) {
@@ -28,16 +29,13 @@ fn settings_row(ui: &mut Ui, label: &str, tooltip: &str, widget: impl FnOnce(&mu
 
 impl super::LyricsAppUI {
     pub(super) fn settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        let label = if self.settings_open { "" } else { "⚙" };
         if ui
-            .add(
-                egui::Button::new(
-                    RichText::new(label)
-                        .size(14.0)
-                        .color(Color32::from_gray(160)),
-                )
-                .frame(false),
-            )
+            .add(egui::Button::selectable(
+                self.settings_open,
+                RichText::new("⚙")
+                    .size(14.0)
+                    .color(Color32::from_gray(160)),
+            ))
             .clicked()
         {
             self.settings_open = !self.settings_open;
@@ -52,27 +50,91 @@ impl super::LyricsAppUI {
             egui::ViewportBuilder::default()
                 .with_title("Lyrics Overlay — Settings")
                 .with_inner_size([320.0, 480.0])
+                .with_min_inner_size([280.0, 320.0])
+                .with_decorations(false) // no window chrome, matches the main overlay
+                .with_transparent(true)
+                .with_always_on_top() // otherwise the always-on-top main window paints over it
                 .with_resizable(true),
             |ctx, _class| {
-                // Make tooltips opaque
-                ctx.style_mut(|style| {
-                    style.visuals.window_fill = Color32::from_rgb(28, 28, 28);
-                    style.visuals.popup_shadow = egui::Shadow::NONE;
+                ctx.set_visuals(egui::Visuals {
+                    panel_fill: Color32::TRANSPARENT,
+                    window_fill: Color32::from_rgb(28, 28, 28),
+                    popup_shadow: egui::Shadow::NONE,
+                    ..egui::Visuals::dark()
                 });
-                // Close when the window's own X is clicked
+
+                handle_resize(ctx, 6.0f32);
+
+                // Close when the window's own X is clicked, or the pointer leaves via Alt+F4 etc.
                 if ctx.input(|i| i.viewport().close_requested()) {
                     self.settings_open = false;
                 }
 
-                egui::CentralPanel::default().show(ctx, |ui| {
+                let full_width = ctx.available_rect().width();
+
+                // Close button, floating above the drag region below
+                egui::Area::new("settings_close".into())
+                    .fixed_pos(egui::pos2(full_width - 22., 8.))
+                    .show(ctx, |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("X")
+                                        .size(13.0)
+                                        .color(Color32::from_gray(160)),
+                                )
+                                .frame(true)
+                                .frame_when_inactive(false),
+                            )
+                            .clicked()
+                        {
+                            self.settings_open = false;
+                        }
+                    });
+
+                let panel_frame = egui::Frame::new()
+                    .fill(Color32::from_rgb(24, 24, 24))
+                    .corner_radius(10)
+                    .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(20)))
+                    .inner_margin(egui::Margin::symmetric(14, 10));
+
+                egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
+                    // Custom title bar: drag-to-move, since decorations are off
+                    let title_rect = egui::Rect::from_min_size(
+                        ui.min_rect().min,
+                        egui::vec2(ui.available_width(), 22.0),
+                    );
+                    if ui
+                        .interact(title_rect, ui.id().with("settings_drag"), egui::Sense::drag())
+                        .dragged()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                    ui.label(
+                        RichText::new("⚙  Settings")
+                            .size(12.0)
+                            .color(Color32::from_gray(150))
+                            .strong(),
+                    );
+                    ui.add_space(4.0);
+                    ui.separator();
+
                     let mut settings = self.settings.blocking_read().clone();
                     let snapshot = format!("{settings:?}");
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        display_settings(ui, &mut settings);
-                        behaviour_settings(ui, &mut settings);
-                        authentication_settings(ui, &mut settings);
-                    });
+                    // Reserve room for the Reset defaults row so it can't get pushed
+                    // below the window by a tall (e.g. expanded Advanced) scroll area.
+                    let reset_row_height = 24.0;
+                    let scroll_max_height = (ui.available_height() - reset_row_height).max(0.0);
+
+                    egui::ScrollArea::vertical()
+                        .max_height(scroll_max_height)
+                        .show(ui, |ui| {
+                            display_settings(ui, &mut settings);
+                            behaviour_settings(ui, &mut settings);
+                            authentication_settings(ui, &mut settings);
+                            advanced_settings(ui, &mut settings);
+                        });
 
                     reset_defaults(ui, &mut settings);
 
@@ -99,6 +161,19 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
                 .text_color(Color32::from_gray(200)),
         );
     });
+    settings_row(
+        ui,
+        "Line spacing",
+        "Vertical space between lyric lines",
+        |ui| {
+            ui.add(
+                egui::Slider::new(&mut settings.line_spacing, 0.0..=100.0)
+                    .step_by(1.0)
+                    .suffix(" px")
+                    .text_color(Color32::from_gray(200)),
+            );
+        },
+    );
     settings_row(
         ui,
         "Background opacity",
@@ -141,9 +216,6 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
             );
         },
     );
-    settings_row(ui, "Show debug stuff", "Do we show debug stuff?", |ui| {
-        ui.checkbox(&mut settings.draw_debug_stuff, "");
-    });
 }
 
 fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
@@ -164,29 +236,31 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
             ui.checkbox(&mut settings.caching_enabled, "");
         },
     );
-    if settings.caching_enabled {
-        settings_row(
-            ui,
-            "Cache folder",
-            "Where do you want to store cache?",
-            |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut settings.cache_folder)
-                        .desired_width(120.0)
-                        .text_color(Color32::from_gray(200)),
-                );
-            },
-        );
-    }
-    settings_row(ui, "Log level", "Log level, what more can I say", |ui| {
-        egui::ComboBox::from_id_salt("log_level")
-            .selected_text(settings.log_level.as_str())
-            .show_ui(ui, |ui| {
-                for level in ["error", "warn", "info", "debug", "trace"] {
-                    ui.selectable_value(&mut settings.log_level, level.to_string(), level);
-                }
-            });
-    });
+
+    settings_row(
+        ui,
+        "Media controls",
+        "Show play/pause and skip buttons in the overlay",
+        |ui| {
+            egui::ComboBox::from_id_salt("media_controls_position")
+                .selected_text(settings.media_controls_position.as_str())
+                .show_ui(ui, |ui| {
+                    for pos in [
+                        MediaControlsPosition::Hidden,
+                        MediaControlsPosition::Top,
+                        MediaControlsPosition::TopHover,
+                        MediaControlsPosition::Bottom,
+                        MediaControlsPosition::BottomHover,
+                    ] {
+                        ui.selectable_value(
+                            &mut settings.media_controls_position,
+                            pos,
+                            pos.as_str(),
+                        );
+                    }
+                });
+        },
+    );
 
     progress_bar_settings(ui, settings);
     easing_settings(ui, settings);
@@ -285,26 +359,70 @@ fn authentication_settings(ui: &mut Ui, settings: &mut Settings) {
             ui.add(
                 egui::TextEdit::singleline(&mut settings.client_secret)
                     .desired_width(120.0)
-                    .text_color(Color32::from_gray(200)),
+                    .text_color(Color32::from_gray(200))
+                    .password(true),
             );
         },
     );
 }
 
+fn advanced_settings(ui: &mut Ui, settings: &mut Settings) {
+    ui.add_space(8.0);
+    egui::CollapsingHeader::new(
+        RichText::new("Advanced")
+            .size(11.0)
+            .color(Color32::from_gray(130))
+            .strong(),
+    )
+    .default_open(false)
+    .show(ui, |ui| {
+        if settings.caching_enabled {
+            settings_row(
+                ui,
+                "Cache folder",
+                "Where do you want to store cache?",
+                |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut settings.cache_folder)
+                            .desired_width(120.0)
+                            .text_color(Color32::from_gray(200)),
+                    );
+                },
+            );
+        }
+        settings_row(ui, "Log level", "Log level, what more can I say", |ui| {
+            egui::ComboBox::from_id_salt("log_level")
+                .selected_text(settings.log_level.as_str())
+                .show_ui(ui, |ui| {
+                    for level in ["error", "warn", "info", "debug", "trace"] {
+                        ui.selectable_value(&mut settings.log_level, level.to_string(), level);
+                    }
+                });
+        });
+    });
+}
+
 fn reset_defaults(ui: &mut Ui, settings: &mut Settings) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-        if ui
-            .add(
-                egui::Button::new(
-                    RichText::new("Reset defaults")
-                        .size(11.0)
-                        .color(Color32::from_gray(110)),
-                )
-                .frame(false),
-            )
-            .clicked()
-        {
+        // Arm on first click, only reset if confirmed with a second click within a few seconds.
+        let armed_id = ui.id().with("reset_defaults_armed_at");
+        let now = ui.input(|i| i.time);
+        let armed = ui
+            .data(|d| d.get_temp::<f64>(armed_id))
+            .is_some_and(|armed_at| now - armed_at < 4.0);
+
+        let (text, color) = if armed {
+            ("Click again to confirm", Color32::from_rgb(210, 90, 90))
+        } else {
+            ("Reset defaults", Color32::from_gray(110))
+        };
+
+        let clicked = ui
+            .add(egui::Button::new(RichText::new(text).size(11.0).color(color)).frame(false))
+            .clicked();
+
+        if clicked && armed {
             // Preserve credentials when resetting display/behaviour settings
             let client_id = settings.client_id.clone();
             let client_secret = settings.client_secret.clone();
@@ -313,6 +431,9 @@ fn reset_defaults(ui: &mut Ui, settings: &mut Settings) {
             settings.client_id = client_id;
             settings.client_secret = client_secret;
             settings.sp_dc = sp_dc;
+            ui.data_mut(|d| d.remove::<f64>(armed_id));
+        } else if clicked {
+            ui.data_mut(|d| d.insert_temp(armed_id, now));
         }
     });
 }

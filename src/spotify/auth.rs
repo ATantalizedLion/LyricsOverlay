@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::sync::RwLock as TokioRwLock;
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 use url::Url;
 use warp::Filter;
 
@@ -135,6 +135,7 @@ impl SpotifyAuthClient {
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new("user-read-currently-playing".to_string()))
             .add_scope(Scope::new("user-read-playback-state".to_string()))
+            .add_scope(Scope::new("user-modify-playback-state".to_string()))
             .set_pkce_challenge(pkce_challenge)
             .url();
 
@@ -209,9 +210,23 @@ impl SpotifyAuthClient {
         Ok(())
     }
 
+    /// Clears the access token everywhere it's held - in-memory and in the persisted
+    /// settings - so a future `authenticate()` can't just keep re-finding and reusing a
+    /// token Spotify has already rejected. Without this, a stale-but-not-locally-expired
+    /// token (or a refresh token that predates a newly added scope) gets found and reused
+    /// forever, silently failing the same way on every call that needs it.
     pub async fn invalidate_token(&self) {
-        let mut token_opt = self.access_token.write().await;
-        *token_opt = None;
+        *self.access_token.write().await = None;
+        *self.refresh_token.write().await = None;
+        *self.token_expiry.write().await = None;
+
+        let mut settings = self.settings.write().await;
+        settings.access_token = None;
+        settings.refresh_token = None;
+        settings.expiry_time_as_unix = None;
+        if let Err(e) = settings.save() {
+            error!("Failed to persist cleared token: {e}");
+        }
     }
 
     pub fn retreive_token_handle(&self) -> Arc<TokioRwLock<Option<String>>> {

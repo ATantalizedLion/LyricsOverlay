@@ -47,8 +47,6 @@ pub struct Settings {
     pub scroll_smoothly: bool,
     /// Time between line transitions
     pub line_transition_ms: u64,
-    /// Do we show debug draws or not.
-    pub draw_debug_stuff: bool,
     /// progress bar position
     pub line_progress_bar_position: ProgressBarPosition,
     /// song bar position
@@ -57,6 +55,8 @@ pub struct Settings {
     pub ease_position: EasingModes,
     /// easing of the color while playing
     pub ease_color: EasingModes,
+    /// where (if at all) to show play/pause/skip controls
+    pub media_controls_position: MediaControlsPosition,
 }
 
 impl Default for Settings {
@@ -81,11 +81,11 @@ impl Default for Settings {
             poll_interval_ms: 4000,
             scroll_smoothly: false,
             line_transition_ms: 400,
-            draw_debug_stuff: false,
             line_progress_bar_position: ProgressBarPosition::Hidden,
             song_progress_bar_position: ProgressBarPosition::Hidden,
             ease_position: EasingModes::Linear,
             ease_color: EasingModes::Cubic,
+            media_controls_position: MediaControlsPosition::Hidden,
         }
     }
 }
@@ -149,6 +149,27 @@ impl EasingModes {
         match self {
             Self::Cubic => "Cubic",
             Self::Linear => "Linear",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum MediaControlsPosition {
+    #[default]
+    Hidden,
+    Top,
+    TopHover,
+    Bottom,
+    BottomHover,
+}
+impl MediaControlsPosition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hidden => "Hidden",
+            Self::Top => "Top",
+            Self::TopHover => "Top (on hover)",
+            Self::Bottom => "Bottom",
+            Self::BottomHover => "Bottom (on hover)",
         }
     }
 }

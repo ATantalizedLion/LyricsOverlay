@@ -61,12 +61,16 @@ pub async fn process_current_track_response(
                 MessageToUI::NotCurrentlyPlaying("Not playing anything".to_owned()),
             )),
             SpotifyClientTrackError::ReqwestError(error) => Ok(Messages::to_ui(
-                MessageToUI::NotCurrentlyPlaying(format!("anything: {error}").to_owned()),
+                MessageToUI::DisplayError(format!("Failed to check current track: {error}")),
             )),
-            SpotifyClientTrackError::NotAuthenticated | SpotifyClientTrackError::TokenError => Ok(
-                Messages::to_ui(MessageToUI::AuthenticationStateUpdate(false)),
-            ),
-            SpotifyClientTrackError::BadRequest => todo!(),
+            SpotifyClientTrackError::NotAuthenticated
+            | SpotifyClientTrackError::TokenError
+            | SpotifyClientTrackError::Forbidden => Ok(Messages::to_ui(
+                MessageToUI::AuthenticationStateUpdate(false),
+            )),
+            SpotifyClientTrackError::BadRequest => Ok(Messages::to_ui(MessageToUI::DisplayError(
+                "Spotify rejected that request (no active device?)".to_owned(),
+            ))),
             SpotifyClientTrackError::RateLimitsExceeded => {
                 Ok(Messages::to_ui(MessageToUI::RateLimitsExceeded))
             }

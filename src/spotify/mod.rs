@@ -20,6 +20,8 @@ pub enum SpotifyClientTrackError {
     NoContentResponse,
     #[error("OAuthError, try reauthenticating")]
     TokenError,
+    #[error("Forbidden - token lacks the required permission, reauthenticating needed")]
+    Forbidden,
     #[error("BadRequest, reauthentication won't help you, I don't know what will")]
     BadRequest,
     #[error("Exceeded spotify rate limits")]
@@ -149,8 +151,9 @@ impl SpotifyClient {
             return Err(SpotifyClientTrackError::TokenError);
         }
         if response.status().as_u16() == 403 {
-            // Bad OAuth request (wrong consumer key, bad nonce, expired timestamp...). Unfortunately, re-authenticating the user won't help here.
-            return Err(SpotifyClientTrackError::BadRequest);
+            // Token doesn't carry the required scope, e.g. a refresh token minted before a
+            // newly required scope was added. Re-authenticating fixes this.
+            return Err(SpotifyClientTrackError::Forbidden);
         }
         if response.status().as_u16() == 429 {
             // The app has exceeded its rate limits.
@@ -175,5 +178,50 @@ impl SpotifyClient {
         }
 
         Ok(playing)
+    }
+
+    async fn send_player_command(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<(), SpotifyClientTrackError> {
+        let token_opt = self.access_token.read().await.clone();
+
+        let Some(token) = token_opt else {
+            return Err(SpotifyClientTrackError::NotAuthenticated);
+        };
+
+        let response = request.bearer_auth(token).send().await?;
+
+        match response.status().as_u16() {
+            200..=299 => Ok(()),
+            401 => Err(SpotifyClientTrackError::TokenError),
+            403 => Err(SpotifyClientTrackError::Forbidden),
+            429 => Err(SpotifyClientTrackError::RateLimitsExceeded),
+            // Includes 404 (no active device) - not much else we can tell the user.
+            _ => Err(SpotifyClientTrackError::BadRequest),
+        }
+    }
+
+    pub async fn play(&self) -> Result<(), SpotifyClientTrackError> {
+        self.send_player_command(self.client.put("https://api.spotify.com/v1/me/player/play"))
+            .await
+    }
+
+    pub async fn pause(&self) -> Result<(), SpotifyClientTrackError> {
+        self.send_player_command(self.client.put("https://api.spotify.com/v1/me/player/pause"))
+            .await
+    }
+
+    pub async fn next_track(&self) -> Result<(), SpotifyClientTrackError> {
+        self.send_player_command(self.client.post("https://api.spotify.com/v1/me/player/next"))
+            .await
+    }
+
+    pub async fn previous_track(&self) -> Result<(), SpotifyClientTrackError> {
+        self.send_player_command(
+            self.client
+                .post("https://api.spotify.com/v1/me/player/previous"),
+        )
+        .await
     }
 }

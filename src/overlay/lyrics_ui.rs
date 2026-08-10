@@ -54,8 +54,6 @@ impl LyricsAppUI {
         let available_height = ui.available_height();
         let (scroll_y, center_bias) = self.compute_scroll_offset(target_line, available_height);
 
-        self.draw_debug_info(ui, target_line, scroll_y, current_ms);
-
         let new_offsets = self.draw_lyric_lines(
             ui,
             synced_lyrics,
@@ -157,15 +155,6 @@ impl LyricsAppUI {
         (scroll_y, center_bias)
     }
 
-    fn draw_debug_info(&self, ui: &mut Ui, target_line: f32, scroll_y: f32, current_ms: u128) {
-        if !self.settings_cache.draw_debug_stuff {
-            return;
-        }
-        ui.label(format!("target_line: {target_line:.3}"));
-        ui.label(format!("scroll_y: {scroll_y:.1}"));
-        ui.label(format!("current_ms: {current_ms}"));
-    }
-
     /// Draws the scrolling lyric lines and returns each line's measured top offset,
     /// to be cached for next frame's scroll-position interpolation.
     #[allow(clippy::too_many_arguments)]
@@ -247,10 +236,13 @@ impl LyricsAppUI {
     }
 
     fn waiting_for_lyrics(&mut self, ui: &mut Ui) {
+        let Some(playing) = &self.currently_playing else {
+            Self::nothing_playing(ui);
+            return;
+        };
+
         ui.vertical_centered(|ui| {
-            if let Some(playing) = &self.currently_playing
-                && let Some(title) = playing.get_track_title()
-            {
+            if let Some(title) = playing.get_track_title() {
                 ui.label(
                     RichText::new(format!("♫  {title}"))
                         .size(18.0)
@@ -261,6 +253,19 @@ impl LyricsAppUI {
                 RichText::new("Loading lyrics…")
                     .size(14.0)
                     .color(Color32::from_gray(100)),
+            );
+        });
+    }
+
+    fn nothing_playing(ui: &mut Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() / 2.0 - 24.0).max(0.0));
+            ui.label(RichText::new("♫").size(26.0).color(Color32::from_gray(70)));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("Nothing playing")
+                    .size(14.0)
+                    .color(Color32::from_gray(110)),
             );
         });
     }

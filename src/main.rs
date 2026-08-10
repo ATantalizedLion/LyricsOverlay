@@ -6,8 +6,6 @@
 //TODO: Additional progress bar for song progress
 //TODO: Settings for how much we change scale and color
 //TODO: Allow togling easing, use of transition time
-//TODO: Make settings window match main window looks
-//TODO: More obvious color for debug prints
 
 // Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
@@ -56,15 +54,19 @@ pub enum MessageToRT {
     GetCurrentTrack,
     GetLyrics(LyricsRequestInfo),
     InvalidateToken,
+    Play,
+    Pause,
+    NextTrack,
+    PreviousTrack,
 }
 
 fn main() {
     // Generate config file if no config is found
-    if !exists("config.toml").unwrap() {
+    let config_created = !exists("config.toml").unwrap();
+    if config_created {
         let str = toml::ser::to_string_pretty(&Settings::default()).unwrap();
         let mut output = File::create("config.toml").unwrap();
         write!(output, "{str}").unwrap();
-        println!("Created config, please add client_id and client_secret");
     }
 
     // Load settings file
@@ -88,6 +90,9 @@ fn main() {
         .finish();
     let _subscriber_guard = tracing::subscriber::set_global_default(subscriber);
     info!("Logging initialized with {}", &settings_read.log_level);
+    if config_created {
+        info!("Created config.toml; add client_id and client_secret to connect Spotify");
+    }
     std::mem::drop(settings_read);
 
     // Channels

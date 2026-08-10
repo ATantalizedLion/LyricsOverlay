@@ -16,6 +16,7 @@ use crate::{
 
 mod authentication_ui;
 mod lyrics_ui;
+mod media_controls_ui;
 mod resize;
 mod settings_panel;
 
@@ -73,14 +74,18 @@ impl LyricsAppUI {
         while let Ok(message) = self.rx.try_recv() {
             match message {
                 MessageToUI::AuthenticationStateUpdate(new_state) => {
+                    let was_authenticated = self.is_auth;
                     self.is_auth = new_state;
                     if new_state {
                         self.tx.try_send(MessageToRT::GetCurrentTrack).unwrap();
-                    }
-                    /*else {
+                    } else if was_authenticated {
+                        // Only clear on the true->false transition, not every repeat of
+                        // an already-false state: invalidate() itself re-sends this same
+                        // message, and re-triggering here would ping-pong forever.
                         self.error_string =
-                            Some("Authentication expired, please reauthenticate".into())
-                    }*/
+                            Some("Spotify session expired, please reconnect".into());
+                        let _ = self.tx.try_send(MessageToRT::InvalidateToken);
+                    }
                 }
                 MessageToUI::CurrentlyPlaying(data) => {
                     let same_track = &self
@@ -109,7 +114,9 @@ impl LyricsAppUI {
                     self.current_song_with_lyrics = Some(song);
                 }
                 MessageToUI::NotCurrentlyPlaying(reason) => {
-                    self.error_string = Some(format!("No track found! ({reason})"));
+                    trace!("Not currently playing: {reason}");
+                    self.currently_playing = None;
+                    self.current_song_with_lyrics = None;
                 }
                 MessageToUI::RateLimitsExceeded => {
                     self.error_string = Some("Rate limits exceeded!".to_string());
@@ -158,7 +165,8 @@ impl eframe::App for LyricsAppUI {
                                 .size(14.0)
                                 .color(Color32::from_gray(160)),
                         )
-                        .frame(false),
+                        .frame(true)
+                        .frame_when_inactive(false),
                     )
                     .clicked()
                 {
@@ -199,6 +207,10 @@ impl eframe::App for LyricsAppUI {
                     }
                 });
             });
+
+        if self.is_auth {
+            self.media_controls_ui(ctx);
+        }
 
         egui::Area::new("error bar".into())
             .fixed_pos(egui::pos2(0., full_height - 20.))

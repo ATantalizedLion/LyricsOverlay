@@ -15,6 +15,7 @@ use crate::lyrics_fetch::LyricsFetcher;
 use crate::lyrics_fetch::LyricsFetcherErr;
 use crate::settings::Settings;
 use crate::spotify::SpotifyClient;
+use crate::spotify::SpotifyClientTrackError;
 use crate::spotify::auth::SpotifyAuthClient;
 use crate::spotify::auth::SpotifyClientAuthError;
 use crate::spotify::poller::SpotifyPoller;
@@ -88,6 +89,18 @@ pub async fn start_runtime(
                 MessageToRT::InvalidateToken => invalidate(auth).await,
                 MessageToRT::GetCurrentTrack => get_current_track(client).await,
                 MessageToRT::GetLyrics(request) => lyrics.get_lyrics(request).await,
+                MessageToRT::Play => {
+                    player_command(client.clone(), client.play().await).await
+                }
+                MessageToRT::Pause => {
+                    player_command(client.clone(), client.pause().await).await
+                }
+                MessageToRT::NextTrack => {
+                    player_command(client.clone(), client.next_track().await).await
+                }
+                MessageToRT::PreviousTrack => {
+                    player_command(client.clone(), client.previous_track().await).await
+                }
             };
 
             match res {
@@ -108,6 +121,19 @@ pub async fn start_runtime(
 
 async fn get_current_track(spotify_client: Arc<SpotifyClient>) -> Result<Messages, RuntimeError> {
     process_current_track_response(spotify_client.get_current_track().await).await
+}
+
+/// Handles the result of a play/pause/skip command: on success, immediately re-fetch the
+/// current track so the UI updates without waiting for the next poll; on failure, surface
+/// it the same way a failed poll would.
+async fn player_command(
+    spotify_client: Arc<SpotifyClient>,
+    result: Result<(), SpotifyClientTrackError>,
+) -> Result<Messages, RuntimeError> {
+    match result {
+        Ok(()) => get_current_track(spotify_client).await,
+        Err(err) => process_current_track_response(Err(err)).await,
+    }
 }
 
 async fn authenticate(
