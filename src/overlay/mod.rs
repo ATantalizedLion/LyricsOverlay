@@ -1,8 +1,11 @@
 use std::{sync::Arc, time::Instant};
 
-use egui::{Color32, RichText, Ui};
+use egui::{
+    Color32, RichText, Ui,
+    epaint::text::{FontInsert, FontPriority, InsertFontFamily},
+};
 use tokio::sync::mpsc;
-use tracing::trace;
+use tracing::{debug, trace, warn};
 
 use tokio::sync::RwLock as TokioRwLock;
 
@@ -50,11 +53,13 @@ pub struct LyricsAppUI {
 
 impl LyricsAppUI {
     pub fn new(
-        _cc: &eframe::CreationContext<'_>,
+        cc: &eframe::CreationContext<'_>,
         tx: mpsc::Sender<MessageToRT>,
         rx: mpsc::Receiver<MessageToUI>,
         settings: &Arc<TokioRwLock<Settings>>,
     ) -> Self {
+        install_cjk_fallback_font(&cc.egui_ctx);
+
         Self {
             is_auth: false,
             tx,
@@ -237,4 +242,45 @@ impl eframe::App for LyricsAppUI {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, self.settings_cache.opacity]
     }
+}
+
+/// egui's built-in font only covers Latin/Cyrillic, so Japanese/Korean (and most other
+/// non-Latin) song titles and lyrics render blank without this. Rather than bundle
+/// multi-megabyte font files with the app, fall back to fonts Windows already ships.
+/// Japanese and Korean are installed as separate fallback fonts (not just one candidate
+/// list) since Yu Gothic doesn't cover Hangul and Malgun Gothic doesn't cover kana.
+fn install_cjk_fallback_font(ctx: &egui::Context) {
+    install_fallback_font(
+        ctx,
+        "cjk_fallback_ja",
+        &[
+            r"C:\Windows\Fonts\YuGothR.ttc",
+            r"C:\Windows\Fonts\msgothic.ttc",
+        ],
+    );
+    install_fallback_font(ctx, "cjk_fallback_ko", &[r"C:\Windows\Fonts\malgun.ttf"]);
+}
+
+/// Tries each candidate path in order and installs the first one found as a fallback
+/// font under `name`. Candidates are alternatives for the same script (e.g. a modern
+/// font and an older one), not additional scripts - call this once per script.
+fn install_fallback_font(ctx: &egui::Context, name: &str, candidates: &[&str]) {
+    for path in candidates {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                ctx.add_font(FontInsert::new(
+                    name,
+                    egui::FontData::from_owned(bytes),
+                    vec![InsertFontFamily {
+                        family: egui::FontFamily::Proportional,
+                        priority: FontPriority::Lowest,
+                    }],
+                ));
+                debug!("Loaded fallback font '{name}' from {path}");
+                return;
+            }
+            Err(e) => trace!("Fallback font '{name}' not found at {path}: {e}"),
+        }
+    }
+    warn!("No fallback font found for '{name}'; some text may not render");
 }

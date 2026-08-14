@@ -16,6 +16,10 @@ pub enum LyricPosition {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct SongLyrics {
     pub synced_lyrics: Vec<LyricLine>,
+    /// Untimed lyric text, used when a source has no line-level timing at all.
+    /// Only meaningful when `synced_lyrics` is empty.
+    #[serde(default)]
+    pub plain_lyrics: Vec<String>,
 }
 
 impl SongLyrics {
@@ -28,6 +32,14 @@ impl SongLyrics {
                     text: " ".to_string(),
                 },
             ],
+            plain_lyrics: vec![],
+        }
+    }
+
+    pub fn plain(lines: Vec<String>) -> Self {
+        Self {
+            synced_lyrics: vec![],
+            plain_lyrics: lines,
         }
     }
     pub fn find_current_index(&self, elapsed_ms: usize) -> LyricPosition {
@@ -82,6 +94,7 @@ pub fn parse_lrc(content: &str, strip_empty_lines: bool) -> SongLyrics {
 
     SongLyrics {
         synced_lyrics: lines,
+        plain_lyrics: vec![],
     }
 }
 
@@ -113,6 +126,14 @@ fn parse_time_tag_to_ms(tag: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_cache_entries_without_plain_lyrics_still_deserialize() {
+        let old_format = r#"{"synced_lyrics":[{"time_ms":18520,"text":"hello"}]}"#;
+        let parsed: SongLyrics = serde_json::from_str(old_format).unwrap();
+        assert_eq!(parsed.synced_lyrics.len(), 1);
+        assert!(parsed.plain_lyrics.is_empty());
+    }
 
     #[test]
     fn parse_rick() {

@@ -203,19 +203,21 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
             ui.checkbox(&mut settings.scroll_smoothly, "");
         },
     );
-    settings_row(
-        ui,
-        "Transition time",
-        "Time spent transitioning from one line to the next (if scrolling smoothly)",
-        |ui| {
-            ui.add(
-                egui::Slider::new(&mut settings.line_transition_ms, 0..=1000)
-                    .step_by(10.0)
-                    .custom_formatter(|v, _| format!("{v}ms"))
-                    .text_color(Color32::from_gray(200)),
-            );
-        },
-    );
+    if settings.scroll_smoothly {
+        settings_row(
+            ui,
+            "Transition time",
+            "Time spent transitioning from one line to the next",
+            |ui| {
+                ui.add(
+                    egui::Slider::new(&mut settings.line_transition_ms, 0..=1000)
+                        .step_by(10.0)
+                        .custom_formatter(|v, _| format!("{v}ms"))
+                        .text_color(Color32::from_gray(200)),
+                );
+            },
+        );
+    }
 }
 
 fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
@@ -314,15 +316,22 @@ fn progress_bar_settings(ui: &mut Ui, settings: &mut Settings) {
 }
 
 fn easing_settings(ui: &mut Ui, settings: &mut Settings) {
-    settings_row(ui, "Position easing", "Ease position?", |ui| {
-        egui::ComboBox::from_id_salt("position_ease")
-            .selected_text(settings.ease_position.as_str())
-            .show_ui(ui, |ui| {
-                for mode in [EasingModes::Cubic, EasingModes::Linear] {
-                    ui.selectable_value(&mut settings.ease_position, mode, mode.as_str());
-                }
-            });
-    });
+    if settings.scroll_smoothly {
+        settings_row(
+            ui,
+            "Position easing",
+            "How the scroll eases into each line",
+            |ui| {
+                egui::ComboBox::from_id_salt("position_ease")
+                    .selected_text(settings.ease_position.as_str())
+                    .show_ui(ui, |ui| {
+                        for mode in [EasingModes::Cubic, EasingModes::Linear] {
+                            ui.selectable_value(&mut settings.ease_position, mode, mode.as_str());
+                        }
+                    });
+            },
+        );
+    }
 
     settings_row(ui, "Color easing", "Ease color?", |ui| {
         egui::ComboBox::from_id_salt("color_ease")

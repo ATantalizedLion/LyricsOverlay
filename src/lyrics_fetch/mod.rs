@@ -171,16 +171,39 @@ impl LyricsFetcher {
             .await
         {
             Ok(lrc_response) => {
-                let parsed = parse_lrc(&lrc_response.synced_lyrics, false);
-                let cache_store_res = self
-                    .store_in_cache(&req, Some(lrc_response.id), &parsed)
-                    .await;
-                if let Err(cache_err) = cache_store_res {
-                    error!("Failed creating cache entry: {:?}", cache_err);
+                let synced = lrc_response
+                    .synced_lyrics
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty());
+                let plain = lrc_response
+                    .plain_lyrics
+                    .as_deref()
+                    .filter(|s| !s.trim().is_empty());
+
+                let parsed = if let Some(synced) = synced {
+                    Some(parse_lrc(synced, false))
+                } else if let Some(plain) = plain {
+                    debug!("LRC has no synced lyrics, falling back to plain lyrics");
+                    Some(SongLyrics::plain(
+                        plain.lines().map(str::to_owned).collect(),
+                    ))
+                } else {
+                    // Instrumental or genuinely no lyrics text - fall through to the
+                    // "could not find lyrics" message below.
+                    None
+                };
+
+                if let Some(parsed) = parsed {
+                    let cache_store_res = self
+                        .store_in_cache(&req, Some(lrc_response.id), &parsed)
+                        .await;
+                    if let Err(cache_err) = cache_store_res {
+                        error!("Failed creating cache entry: {:?}", cache_err);
+                    }
+                    return Ok(Messages::to_ui(MessageToUI::GotLyrics(
+                        SongWithLyrics::new(parsed, req),
+                    )));
                 }
-                return Ok(Messages::to_ui(MessageToUI::GotLyrics(
-                    SongWithLyrics::new(parsed, req),
-                )));
             }
             Err(err) => {
                 warn!("Failed to fetch lyrics from LRC: {err}");

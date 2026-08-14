@@ -23,8 +23,10 @@ pub(super) struct LRCOkResponse {
     pub album_name: String,
     pub duration: f32,
     pub instrumental: bool,
-    pub plain_lyrics: String,
-    pub synced_lyrics: String,
+    // Both are `null` in the API response, not just absent/empty, when unavailable -
+    // a bare `String` here would fail to deserialize the whole response.
+    pub plain_lyrics: Option<String>,
+    pub synced_lyrics: Option<String>,
 }
 
 impl LyricsFetcher {

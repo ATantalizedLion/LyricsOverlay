@@ -2,14 +2,10 @@
 // Suppress the console window on Windows for release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//TODO: Change color change timing in scroll, start moving only when within transition time?
-//TODO: Additional progress bar for song progress
 //TODO: Settings for how much we change scale and color
-//TODO: Allow togling easing, use of transition time
 
 // Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
-//TODO: Improved handling of unsynced lyrics, show scrollbar?
 //TODO: Logo?
 //TODO: Theming/Presets?
 
@@ -120,7 +116,10 @@ fn main() {
             .with_decorations(false) // no window chrome
             .with_transparent(true) // transparent background
             .with_always_on_top()
-            .with_resizable(true),
+            .with_resizable(true)
+            // Otherwise Windows' Aero Snap maximizes the window when it's dragged to the
+            // top of the screen, which - being undecorated - leaves no way back out.
+            .with_maximize_button(false),
         renderer: eframe::Renderer::Wgpu, // EXPERIMENT: see egui-winit patch in vendor/
         ..Default::default()
     };

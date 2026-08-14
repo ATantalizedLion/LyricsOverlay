@@ -39,6 +39,15 @@ impl LyricsAppUI {
 
         draw_song_header(ui, song);
 
+        if song.lyrics.synced_lyrics.is_empty() {
+            if song.lyrics.plain_lyrics.is_empty() {
+                self.waiting_for_lyrics(ui);
+            } else {
+                self.draw_plain_lyrics(ui, &song.lyrics.plain_lyrics);
+            }
+            return;
+        }
+
         let current_ms = self.current_playback_ms();
         let synced_lyrics = &song.lyrics.synced_lyrics;
         let song_end_ms = (song.duration_sec * 1000.) as i64;
@@ -268,6 +277,33 @@ impl LyricsAppUI {
                     .color(Color32::from_gray(110)),
             );
         });
+    }
+
+    /// No line-level timing is available for this song, so just show the full text and
+    /// let the user scroll manually instead of pretending we can track their position.
+    fn draw_plain_lyrics(&self, ui: &mut Ui, lines: &[String]) {
+        ui.label(
+            RichText::new("Lyrics aren't synced to playback")
+                .size(11.0)
+                .color(Color32::from_gray(120)),
+        );
+        ui.add_space(4.0);
+
+        ScrollArea::vertical()
+            .id_salt("plain_lyrics_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                    for line in lines {
+                        ui.label(
+                            RichText::new(line)
+                                .size(self.settings_cache.font_size)
+                                .color(Color32::from_gray(210)),
+                        );
+                        ui.add_space(self.settings_cache.line_spacing);
+                    }
+                });
+            });
     }
 }
 
