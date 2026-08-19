@@ -57,6 +57,14 @@ pub struct Settings {
     pub ease_color: EasingModes,
     /// where (if at all) to show play/pause/skip controls
     pub media_controls_position: MediaControlsPosition,
+    /// Background color of the overlay (opacity is controlled separately)
+    pub background_color: [u8; 3],
+    /// Color of lines already sung
+    pub past_line_color: [u8; 3],
+    /// Color of the line currently being sung
+    pub current_line_color: [u8; 3],
+    /// Color of lines not yet sung
+    pub future_line_color: [u8; 3],
 }
 
 impl Default for Settings {
@@ -86,6 +94,10 @@ impl Default for Settings {
             ease_position: EasingModes::Linear,
             ease_color: EasingModes::Cubic,
             media_controls_position: MediaControlsPosition::Hidden,
+            background_color: [0, 0, 0],
+            past_line_color: [200, 180, 255],
+            current_line_color: [255, 255, 255],
+            future_line_color: [180, 210, 255],
         }
     }
 }

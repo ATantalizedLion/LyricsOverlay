@@ -3,7 +3,52 @@ use egui::{Color32, RichText, Ui};
 use crate::overlay::resize::handle_resize;
 use crate::settings::{EasingModes, MediaControlsPosition, ProgressBarPosition, Settings};
 
-// TODO: Separate settings and theming (basically, color presets), might as well separate settings and state and settings into sub-structs while we are at it.
+struct ThemePreset {
+    name: &'static str,
+    background: [u8; 3],
+    past: [u8; 3],
+    current: [u8; 3],
+    future: [u8; 3],
+}
+
+const THEME_PRESETS: &[ThemePreset] = &[
+    ThemePreset {
+        name: "Classic",
+        background: [0, 0, 0],
+        past: [200, 180, 255],
+        current: [255, 255, 255],
+        future: [180, 210, 255],
+    },
+    ThemePreset {
+        name: "Sunset",
+        background: [20, 8, 5],
+        past: [255, 180, 120],
+        current: [255, 255, 255],
+        future: [255, 110, 90],
+    },
+    ThemePreset {
+        name: "Ocean",
+        background: [0, 8, 15],
+        past: [150, 220, 255],
+        current: [255, 255, 255],
+        future: [80, 160, 220],
+    },
+    ThemePreset {
+        name: "Forest",
+        background: [4, 10, 5],
+        past: [180, 255, 180],
+        current: [255, 255, 255],
+        future: [90, 200, 120],
+    },
+    ThemePreset {
+        name: "Mono",
+        background: [0, 0, 0],
+        past: [160, 160, 160],
+        current: [255, 255, 255],
+        future: [100, 100, 100],
+    },
+];
+
 fn section_label(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
     ui.label(
@@ -25,6 +70,28 @@ fn settings_row(ui: &mut Ui, label: &str, tooltip: &str, widget: impl FnOnce(&mu
         .on_hover_text(tooltip);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), widget);
     });
+}
+
+/// Custom title bar: drag-to-move, since decorations are off.
+fn settings_title_bar(ui: &mut Ui, ctx: &egui::Context) {
+    let title_rect = egui::Rect::from_min_size(
+        ui.min_rect().min,
+        egui::vec2(ui.available_width(), 22.0),
+    );
+    if ui
+        .interact(title_rect, ui.id().with("settings_drag"), egui::Sense::drag())
+        .dragged()
+    {
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+    ui.label(
+        RichText::new("⚙  Settings")
+            .size(12.0)
+            .color(Color32::from_gray(150))
+            .strong(),
+    );
+    ui.add_space(4.0);
+    ui.separator();
 }
 
 impl super::LyricsAppUI {
@@ -99,25 +166,7 @@ impl super::LyricsAppUI {
                     .inner_margin(egui::Margin::symmetric(14, 10));
 
                 egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
-                    // Custom title bar: drag-to-move, since decorations are off
-                    let title_rect = egui::Rect::from_min_size(
-                        ui.min_rect().min,
-                        egui::vec2(ui.available_width(), 22.0),
-                    );
-                    if ui
-                        .interact(title_rect, ui.id().with("settings_drag"), egui::Sense::drag())
-                        .dragged()
-                    {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    ui.label(
-                        RichText::new("⚙  Settings")
-                            .size(12.0)
-                            .color(Color32::from_gray(150))
-                            .strong(),
-                    );
-                    ui.add_space(4.0);
-                    ui.separator();
+                    settings_title_bar(ui, ctx);
 
                     let mut settings = self.settings.blocking_read().clone();
                     let snapshot = format!("{settings:?}");
@@ -131,6 +180,7 @@ impl super::LyricsAppUI {
                         .max_height(scroll_max_height)
                         .show(ui, |ui| {
                             display_settings(ui, &mut settings);
+                            theme_settings(ui, &mut settings);
                             behaviour_settings(ui, &mut settings);
                             authentication_settings(ui, &mut settings);
                             advanced_settings(ui, &mut settings);
@@ -218,6 +268,45 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
             },
         );
     }
+}
+
+fn theme_settings(ui: &mut Ui, settings: &mut Settings) {
+    section_label(ui, "Theme");
+
+    ui.horizontal_wrapped(|ui| {
+        for preset in THEME_PRESETS {
+            if ui.button(preset.name).clicked() {
+                settings.background_color = preset.background;
+                settings.past_line_color = preset.past;
+                settings.current_line_color = preset.current;
+                settings.future_line_color = preset.future;
+            }
+        }
+    });
+    ui.add_space(4.0);
+
+    settings_row(
+        ui,
+        "Background",
+        "Background color of the overlay",
+        |ui| {
+            ui.color_edit_button_srgb(&mut settings.background_color);
+        },
+    );
+    settings_row(ui, "Past line", "Color of lines already sung", |ui| {
+        ui.color_edit_button_srgb(&mut settings.past_line_color);
+    });
+    settings_row(
+        ui,
+        "Current line",
+        "Color of the line currently being sung",
+        |ui| {
+            ui.color_edit_button_srgb(&mut settings.current_line_color);
+        },
+    );
+    settings_row(ui, "Future line", "Color of lines not yet sung", |ui| {
+        ui.color_edit_button_srgb(&mut settings.future_line_color);
+    });
 }
 
 fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {

@@ -197,10 +197,9 @@ impl LyricsAppUI {
                         let alpha = (alpha_f * 255.0) as u8;
 
                         let signed = i as f32 - target_line;
-                        // TODO: Add to settings
-                        let past_color = [200u8, 180, 255];
-                        let current_color = [255u8, 255, 255];
-                        let future_color = [180u8, 210, 255];
+                        let past_color = self.settings_cache.past_line_color;
+                        let current_color = self.settings_cache.current_line_color;
+                        let future_color = self.settings_cache.future_line_color;
 
                         let (r, g, b) = if signed < 0.0 {
                             let t = ease_in_out((-signed).min(1.0), self.settings_cache.ease_color);

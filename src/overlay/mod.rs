@@ -240,7 +240,13 @@ impl eframe::App for LyricsAppUI {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        [0.0, 0.0, 0.0, self.settings_cache.opacity]
+        let [r, g, b] = self.settings_cache.background_color;
+        [
+            f32::from(r) / 255.0,
+            f32::from(g) / 255.0,
+            f32::from(b) / 255.0,
+            self.settings_cache.opacity,
+        ]
     }
 }
 
