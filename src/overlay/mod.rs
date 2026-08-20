@@ -49,6 +49,9 @@ pub struct LyricsAppUI {
 
     /// measured y of each line, updated every frame
     line_top_offsets: Vec<f32>,
+
+    /// Current size of the main window, cached each frame so we can persist it on exit
+    window_size: [f32; 2],
 }
 
 impl LyricsAppUI {
@@ -60,6 +63,9 @@ impl LyricsAppUI {
     ) -> Self {
         install_cjk_fallback_font(&cc.egui_ctx);
 
+        let settings_cache = settings.blocking_read().clone();
+        let window_size = [settings_cache.window_width, settings_cache.window_height];
+
         Self {
             is_auth: false,
             tx,
@@ -69,9 +75,10 @@ impl LyricsAppUI {
             time_of_last_req: Instant::now(),
             current_song_with_lyrics: None,
             settings: settings.clone(),
-            settings_cache: settings.blocking_read().clone(),
+            settings_cache,
             settings_open: false,
             line_top_offsets: vec![],
+            window_size,
         }
     }
 
@@ -145,6 +152,9 @@ impl eframe::App for LyricsAppUI {
 
         let full_width = ctx.available_rect().width();
         let full_height = ctx.available_rect().height();
+
+        let viewport_rect = ctx.viewport_rect();
+        self.window_size = [viewport_rect.width(), viewport_rect.height()];
 
         // Stop font from being shifted for font alignment
         ctx.tessellation_options_mut(|opts| {
@@ -237,6 +247,14 @@ impl eframe::App for LyricsAppUI {
                     });
                 }
             });
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let mut settings = self.settings.blocking_write();
+        [settings.window_width, settings.window_height] = self.window_size;
+        if let Err(e) = settings.save() {
+            warn!("Failed to save window size on exit: {e}");
+        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

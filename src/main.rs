@@ -7,7 +7,6 @@
 // Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
 //TODO: Logo?
-//TODO: Theming/Presets?
 
 use std::fs::{File, exists};
 use std::io::Write;
@@ -108,10 +107,15 @@ fn main() {
         }
     });
 
+    let initial_size = {
+        let settings = rw_settings.blocking_read();
+        [settings.window_width, settings.window_height]
+    };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Lyrics Overlay")
-            .with_inner_size([680.0, 340.0]) // TODO: Restore size when starting
+            .with_inner_size(initial_size)
             .with_min_inner_size([320.0, 160.0])
             .with_decorations(false) // no window chrome
             .with_transparent(true) // transparent background

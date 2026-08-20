@@ -65,6 +65,10 @@ pub struct Settings {
     pub current_line_color: [u8; 3],
     /// Color of lines not yet sung
     pub future_line_color: [u8; 3],
+    /// Width of the main window, in points
+    pub window_width: f32,
+    /// Height of the main window, in points
+    pub window_height: f32,
 }
 
 impl Default for Settings {
@@ -98,6 +102,8 @@ impl Default for Settings {
             past_line_color: [200, 180, 255],
             current_line_color: [255, 255, 255],
             future_line_color: [180, 210, 255],
+            window_width: 680.0,
+            window_height: 340.0,
         }
     }
 }
