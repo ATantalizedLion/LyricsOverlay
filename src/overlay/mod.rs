@@ -173,7 +173,7 @@ impl eframe::App for LyricsAppUI {
                         egui::Button::new(
                             RichText::new(label)
                                 .size(14.0)
-                                .color(Color32::from_gray(160)),
+                                .color(accent_color(self.settings_cache.current_line_color)),
                         )
                         .frame(true)
                         .frame_when_inactive(false),
@@ -253,6 +253,19 @@ impl eframe::App for LyricsAppUI {
             self.settings_cache.opacity,
         ]
     }
+}
+
+/// Blends a theme color partway toward neutral gray, for UI chrome (icons, titles,
+/// window backgrounds) that should hint at the active theme without becoming as loud as
+/// the fully-saturated lyric colors.
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_sign_loss)]
+pub(super) fn accent_color(base: [u8; 3]) -> Color32 {
+    const NEUTRAL: f32 = 170.0;
+    const BLEND: f32 = 0.4;
+    // Always in 0..=255: a weighted average of two values already in that range.
+    let mix = |c: u8| (f32::from(c).mul_add(BLEND, NEUTRAL * (1.0 - BLEND))) as u8;
+    Color32::from_rgb(mix(base[0]), mix(base[1]), mix(base[2]))
 }
 
 /// egui's built-in font only covers Latin/Cyrillic, so Japanese/Korean (and most other

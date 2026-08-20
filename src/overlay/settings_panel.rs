@@ -28,7 +28,7 @@ fn settings_row(ui: &mut Ui, label: &str, tooltip: &str, widget: impl FnOnce(&mu
 }
 
 /// Custom title bar: drag-to-move, since decorations are off.
-fn settings_title_bar(ui: &mut Ui, ctx: &egui::Context) {
+fn settings_title_bar(ui: &mut Ui, ctx: &egui::Context, accent: Color32) {
     let title_rect = egui::Rect::from_min_size(
         ui.min_rect().min,
         egui::vec2(ui.available_width(), 22.0),
@@ -39,24 +39,19 @@ fn settings_title_bar(ui: &mut Ui, ctx: &egui::Context) {
     {
         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
-    ui.label(
-        RichText::new("⚙  Settings")
-            .size(12.0)
-            .color(Color32::from_gray(150))
-            .strong(),
-    );
+    ui.label(RichText::new("⚙  Settings").size(12.0).color(accent).strong());
     ui.add_space(4.0);
     ui.separator();
 }
 
 impl super::LyricsAppUI {
     pub(super) fn settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let accent = super::accent_color(self.settings_cache.current_line_color);
+
         if ui
             .add(egui::Button::selectable(
                 self.settings_open,
-                RichText::new("⚙")
-                    .size(14.0)
-                    .color(Color32::from_gray(160)),
+                RichText::new("⚙").size(14.0).color(accent),
             ))
             .clicked()
         {
@@ -66,6 +61,8 @@ impl super::LyricsAppUI {
         if !self.settings_open {
             return;
         }
+
+        let background = self.settings_cache.background_color;
 
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("settings_window"),
@@ -78,9 +75,18 @@ impl super::LyricsAppUI {
                 .with_always_on_top() // otherwise the always-on-top main window paints over it
                 .with_resizable(true),
             |ctx, _class| {
+                // Popup/dropdown background: the theme's background, nudged lighter so
+                // dropdowns stay visually distinct from the panel behind them.
+                let lighten = |c: u8| c.saturating_add(12);
+                let popup_fill = Color32::from_rgb(
+                    lighten(background[0]),
+                    lighten(background[1]),
+                    lighten(background[2]),
+                );
+
                 ctx.set_visuals(egui::Visuals {
                     panel_fill: Color32::TRANSPARENT,
-                    window_fill: Color32::from_rgb(28, 28, 28),
+                    window_fill: popup_fill,
                     popup_shadow: egui::Shadow::NONE,
                     ..egui::Visuals::dark()
                 });
@@ -100,13 +106,9 @@ impl super::LyricsAppUI {
                     .show(ctx, |ui| {
                         if ui
                             .add(
-                                egui::Button::new(
-                                    RichText::new("X")
-                                        .size(13.0)
-                                        .color(Color32::from_gray(160)),
-                                )
-                                .frame(true)
-                                .frame_when_inactive(false),
+                                egui::Button::new(RichText::new("X").size(13.0).color(accent))
+                                    .frame(true)
+                                    .frame_when_inactive(false),
                             )
                             .clicked()
                         {
@@ -115,13 +117,13 @@ impl super::LyricsAppUI {
                     });
 
                 let panel_frame = egui::Frame::new()
-                    .fill(Color32::from_rgb(24, 24, 24))
+                    .fill(Color32::from_rgb(background[0], background[1], background[2]))
                     .corner_radius(10)
                     .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(20)))
                     .inner_margin(egui::Margin::symmetric(14, 10));
 
                 egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
-                    settings_title_bar(ui, ctx);
+                    settings_title_bar(ui, ctx, accent);
 
                     let mut settings = self.settings.blocking_read().clone();
                     let snapshot = format!("{settings:?}");

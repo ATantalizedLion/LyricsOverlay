@@ -38,8 +38,10 @@ impl LyricsAppUI {
     }
 
     fn media_controls_row(&mut self, ui: &mut Ui) {
+        let accent = super::accent_color(self.settings_cache.current_line_color);
+
         ui.horizontal(|ui| {
-            if control_button(ui, "⏮").clicked() {
+            if control_button(ui, "⏮", accent).clicked() {
                 let _ = self.tx.try_send(MessageToRT::PreviousTrack);
             }
 
@@ -47,7 +49,7 @@ impl LyricsAppUI {
                 .currently_playing
                 .as_ref()
                 .is_some_and(|playing| playing.is_playing);
-            if control_button(ui, if is_playing { "⏸" } else { "▶" }).clicked() {
+            if control_button(ui, if is_playing { "⏸" } else { "▶" }, accent).clicked() {
                 let msg = if is_playing {
                     MessageToRT::Pause
                 } else {
@@ -56,16 +58,16 @@ impl LyricsAppUI {
                 let _ = self.tx.try_send(msg);
             }
 
-            if control_button(ui, "⏭").clicked() {
+            if control_button(ui, "⏭", accent).clicked() {
                 let _ = self.tx.try_send(MessageToRT::NextTrack);
             }
         });
     }
 }
 
-fn control_button(ui: &mut Ui, label: &str) -> egui::Response {
+fn control_button(ui: &mut Ui, label: &str, color: Color32) -> egui::Response {
     ui.add(
-        egui::Button::new(RichText::new(label).size(15.0).color(Color32::from_gray(190)))
+        egui::Button::new(RichText::new(label).size(15.0).color(color))
             .frame(true)
             .frame_when_inactive(false),
     )

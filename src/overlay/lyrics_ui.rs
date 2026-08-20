@@ -37,7 +37,11 @@ impl LyricsAppUI {
             return;
         }
 
-        draw_song_header(ui, song);
+        draw_song_header(
+            ui,
+            song,
+            super::accent_color(self.settings_cache.current_line_color),
+        );
 
         if song.lyrics.synced_lyrics.is_empty() {
             if song.lyrics.plain_lyrics.is_empty() {
@@ -306,11 +310,11 @@ impl LyricsAppUI {
     }
 }
 
-fn draw_song_header(ui: &mut Ui, song: &SongWithLyrics) {
+fn draw_song_header(ui: &mut Ui, song: &SongWithLyrics, accent: Color32) {
     ui.label(
         RichText::new(format!("♫ {} - {}", song.artist_name, song.track_name))
             .size(11.0)
-            .color(Color32::from_gray(180)),
+            .color(accent),
     );
 }
 
