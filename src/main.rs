@@ -7,7 +7,6 @@
 // Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
 //TODO: Logo?
-//TODO: Theming/Presets?
 
 use std::fs::{File, exists};
 use std::io::Write;
@@ -33,6 +32,7 @@ mod overlay;
 mod runtime;
 mod settings;
 mod spotify;
+mod theming;
 
 #[derive(Debug)]
 pub enum MessageToUI {
@@ -64,6 +64,8 @@ fn main() {
         let mut output = File::create("config.toml").unwrap();
         write!(output, "{str}").unwrap();
     }
+
+    theming::ensure_themes_dir();
 
     // Load settings file
     let settings = match Settings::new() {

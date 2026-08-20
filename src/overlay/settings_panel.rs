@@ -2,52 +2,7 @@ use egui::{Color32, RichText, Ui};
 
 use crate::overlay::resize::handle_resize;
 use crate::settings::{EasingModes, MediaControlsPosition, ProgressBarPosition, Settings};
-
-struct ThemePreset {
-    name: &'static str,
-    background: [u8; 3],
-    past: [u8; 3],
-    current: [u8; 3],
-    future: [u8; 3],
-}
-
-const THEME_PRESETS: &[ThemePreset] = &[
-    ThemePreset {
-        name: "Classic",
-        background: [0, 0, 0],
-        past: [200, 180, 255],
-        current: [255, 255, 255],
-        future: [180, 210, 255],
-    },
-    ThemePreset {
-        name: "Sunset",
-        background: [20, 8, 5],
-        past: [255, 180, 120],
-        current: [255, 255, 255],
-        future: [255, 110, 90],
-    },
-    ThemePreset {
-        name: "Ocean",
-        background: [0, 8, 15],
-        past: [150, 220, 255],
-        current: [255, 255, 255],
-        future: [80, 160, 220],
-    },
-    ThemePreset {
-        name: "Forest",
-        background: [4, 10, 5],
-        past: [180, 255, 180],
-        current: [255, 255, 255],
-        future: [90, 200, 120],
-    },
-    ThemePreset {
-        name: "Mono",
-        background: [0, 0, 0],
-        past: [160, 160, 160],
-        current: [255, 255, 255],
-        future: [100, 100, 100],
-    },
-];
+use crate::theming::{self, Theme};
 
 fn section_label(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
@@ -180,7 +135,7 @@ impl super::LyricsAppUI {
                         .max_height(scroll_max_height)
                         .show(ui, |ui| {
                             display_settings(ui, &mut settings);
-                            theme_settings(ui, &mut settings);
+                            theme_settings(ui, &mut settings, &self.custom_themes);
                             behaviour_settings(ui, &mut settings);
                             authentication_settings(ui, &mut settings);
                             advanced_settings(ui, &mut settings);
@@ -270,19 +225,36 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     }
 }
 
-fn theme_settings(ui: &mut Ui, settings: &mut Settings) {
+fn theme_settings(ui: &mut Ui, settings: &mut Settings, custom_themes: &[Theme]) {
     section_label(ui, "Theme");
 
+    let apply = |settings: &mut Settings, theme: &Theme| {
+        settings.background_color = theme.background;
+        settings.past_line_color = theme.past_line;
+        settings.current_line_color = theme.current_line;
+        settings.future_line_color = theme.future_line;
+    };
+
     ui.horizontal_wrapped(|ui| {
-        for preset in THEME_PRESETS {
-            if ui.button(preset.name).clicked() {
-                settings.background_color = preset.background;
-                settings.past_line_color = preset.past;
-                settings.current_line_color = preset.current;
-                settings.future_line_color = preset.future;
+        for theme in &theming::builtin_themes() {
+            if ui.button(&theme.name).clicked() {
+                apply(settings, theme);
             }
         }
     });
+    if !custom_themes.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for theme in custom_themes {
+                if ui
+                    .button(&theme.name)
+                    .on_hover_text("Custom theme from the themes/ folder")
+                    .clicked()
+                {
+                    apply(settings, theme);
+                }
+            }
+        });
+    }
     ui.add_space(4.0);
 
     settings_row(

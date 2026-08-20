@@ -15,6 +15,7 @@ use crate::{
     overlay::resize::handle_resize,
     settings::Settings,
     spotify::CurrentlyPlayingResponse,
+    theming::{self, Theme},
 };
 
 mod authentication_ui;
@@ -49,6 +50,9 @@ pub struct LyricsAppUI {
 
     /// measured y of each line, updated every frame
     line_top_offsets: Vec<f32>,
+
+    /// User-defined themes loaded from the `themes/` folder at startup
+    custom_themes: Vec<Theme>,
 }
 
 impl LyricsAppUI {
@@ -72,6 +76,7 @@ impl LyricsAppUI {
             settings_cache: settings.blocking_read().clone(),
             settings_open: false,
             line_top_offsets: vec![],
+            custom_themes: theming::load_custom_themes(),
         }
     }
 
