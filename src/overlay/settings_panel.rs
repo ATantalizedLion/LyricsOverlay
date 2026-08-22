@@ -45,15 +45,19 @@ fn settings_title_bar(ui: &mut Ui, ctx: &egui::Context, accent: Color32) {
 }
 
 impl super::LyricsAppUI {
-    pub(super) fn settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+    /// `show_button` controls only the gear toggle's visibility (e.g. hidden until
+    /// hover); the settings viewport itself, once open, keeps being serviced every
+    /// frame regardless, since egui's immediate viewports need that to stay alive.
+    pub(super) fn settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, show_button: bool) {
         let accent = super::accent_color(self.settings_cache.current_line_color);
 
-        if ui
-            .add(egui::Button::selectable(
-                self.settings_open,
-                RichText::new("⚙").size(14.0).color(accent),
-            ))
-            .clicked()
+        if show_button
+            && ui
+                .add(egui::Button::selectable(
+                    self.settings_open,
+                    RichText::new("⚙").size(14.0).color(accent),
+                ))
+                .clicked()
         {
             self.settings_open = !self.settings_open;
         }
@@ -200,6 +204,14 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
         "Do we reduce opacity of lines not currently being sung",
         |ui| {
             ui.checkbox(&mut settings.dim_distant_lines, "");
+        },
+    );
+    settings_row(
+        ui,
+        "Auto-hide window buttons",
+        "Only show the minimize/settings/close buttons while hovering the window",
+        |ui| {
+            ui.checkbox(&mut settings.window_controls_on_hover, "");
         },
     );
     settings_row(

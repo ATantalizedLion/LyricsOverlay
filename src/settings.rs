@@ -65,6 +65,8 @@ pub struct Settings {
     pub current_line_color: [u8; 3],
     /// Color of lines not yet sung
     pub future_line_color: [u8; 3],
+    /// Only show the minimize/settings/close buttons while hovering the window
+    pub window_controls_on_hover: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +100,7 @@ impl Default for Settings {
             past_line_color: [200, 180, 255],
             current_line_color: [255, 255, 255],
             future_line_color: [180, 210, 255],
+            window_controls_on_hover: false,
         }
     }
 }

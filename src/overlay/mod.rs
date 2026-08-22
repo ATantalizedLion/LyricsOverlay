@@ -134,6 +134,67 @@ impl LyricsAppUI {
             }
         }
     }
+
+    /// Minimize/close buttons, and the settings gear + its viewport.
+    fn draw_window_controls(&mut self, ctx: &egui::Context, full_width: f32) {
+        // When enabled, the minimize/settings/close buttons only render while the
+        // pointer is somewhere over the window, keeping the overlay fully minimal at rest.
+        let show_window_controls = !self.settings_cache.window_controls_on_hover
+            || ctx.input(|i| i.pointer.hover_pos()).is_some();
+
+        if show_window_controls {
+            // Exit button
+            egui::Area::new("exit".into())
+                .fixed_pos(egui::pos2(full_width - 25., 10.))
+                .show(ctx, |ui| {
+                    let label = "X";
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(label)
+                                    .size(14.0)
+                                    .color(accent_color(self.settings_cache.current_line_color)),
+                            )
+                            .frame(true)
+                            .frame_when_inactive(false),
+                        )
+                        .clicked()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+
+            // Minimize button
+            egui::Area::new("minimize".into())
+                .fixed_pos(egui::pos2(full_width - 45., 10.))
+                .show(ctx, |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("─")
+                                    .size(14.0)
+                                    .color(accent_color(self.settings_cache.current_line_color)),
+                            )
+                            .frame(true)
+                            .frame_when_inactive(false),
+                        )
+                        .clicked()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    }
+                });
+        }
+
+        // Always shown (not gated on hover): once settings is open, its own viewport
+        // needs to be serviced every frame regardless of whether the gear button that
+        // toggles it is currently visible. The gear button itself still respects
+        // `show_window_controls`.
+        egui::Area::new("settings_overlay".into())
+            .fixed_pos(egui::pos2(full_width - 65., 10.))
+            .show(ctx, |ui| {
+                self.settings_ui(ui, ctx, show_window_controls);
+            });
+    }
 }
 
 impl eframe::App for LyricsAppUI {
@@ -163,33 +224,7 @@ impl eframe::App for LyricsAppUI {
 
         self.message_loop();
 
-        // Exit button
-        egui::Area::new("exit".into())
-            .fixed_pos(egui::pos2(full_width - 25., 10.))
-            .show(ctx, |ui| {
-                let label = "X";
-                if ui
-                    .add(
-                        egui::Button::new(
-                            RichText::new(label)
-                                .size(14.0)
-                                .color(accent_color(self.settings_cache.current_line_color)),
-                        )
-                        .frame(true)
-                        .frame_when_inactive(false),
-                    )
-                    .clicked()
-                {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-
-        // Settings button
-        egui::Area::new("settings_overlay".into())
-            .fixed_pos(egui::pos2(full_width - 45., 10.))
-            .show(ctx, |ui| {
-                self.settings_ui(ui, ctx);
-            });
+        self.draw_window_controls(ctx, full_width);
 
         // Transparent outer frame, we use this for allowing dragging and resizing
         let frame = egui::Frame::new()
