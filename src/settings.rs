@@ -4,7 +4,6 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
-//TODO Split settings into multiple sub-structs
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -41,8 +40,8 @@ pub struct Settings {
     pub cache_folder: String,
     /// Dim lines that are far from the current line
     pub dim_distant_lines: bool,
-    /// How often (seconds) to poll Spotify for the current track
-    pub poll_interval_ms: u64,
+    /// How often (ms) to poll Windows SMTC for the current track
+    pub smtc_poll_interval_ms: u64,
     /// Scroll smoothly or jump per line
     pub scroll_smoothly: bool,
     /// Time between line transitions
@@ -67,6 +66,16 @@ pub struct Settings {
     pub future_line_color: [u8; 3],
     /// Only show the minimize/settings/close buttons while hovering the window
     pub window_controls_on_hover: bool,
+    /// Last known window position (top-left, monitor space, egui points). `None` until
+    /// the window has been moved at least once.
+    pub window_pos: Option<[f32; 2]>,
+    /// Last known window size (egui points)
+    pub window_size: [f32; 2],
+    /// Which now-playing/control source to check first - the other is used as a fallback
+    /// when the preferred one has nothing (e.g. Spotify Connect playing on another
+    /// device/speaker that SMTC can't see, or vice versa). Requires being connected (see
+    /// Client ID/Secret below) for either Spotify option to do anything.
+    pub now_playing_source: NowPlayingSource,
 }
 
 impl Default for Settings {
@@ -88,7 +97,7 @@ impl Default for Settings {
             caching_enabled: true,
             cache_folder: "cache".into(),
             dim_distant_lines: true,
-            poll_interval_ms: 4000,
+            smtc_poll_interval_ms: 1000,
             scroll_smoothly: false,
             line_transition_ms: 400,
             line_progress_bar_position: ProgressBarPosition::Hidden,
@@ -101,6 +110,9 @@ impl Default for Settings {
             current_line_color: [255, 255, 255],
             future_line_color: [180, 210, 255],
             window_controls_on_hover: false,
+            window_pos: None,
+            window_size: [680.0, 340.0],
+            now_playing_source: NowPlayingSource::SmtcOnly,
         }
     }
 }
@@ -185,6 +197,26 @@ impl MediaControlsPosition {
             Self::TopHover => "Top (on hover)",
             Self::Bottom => "Bottom",
             Self::BottomHover => "Bottom (on hover)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum NowPlayingSource {
+    /// Windows SMTC only - works with any app, no Spotify calls ever made.
+    #[default]
+    SmtcOnly,
+    /// SMTC checked first; Spotify's own API used as a fallback when SMTC has nothing.
+    PreferSmtc,
+    /// Spotify's own API checked first; SMTC used as a fallback when Spotify has nothing.
+    PreferSpotify,
+}
+impl NowPlayingSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SmtcOnly => "Windows only",
+            Self::PreferSmtc => "Windows, then Spotify",
+            Self::PreferSpotify => "Spotify, then Windows",
         }
     }
 }

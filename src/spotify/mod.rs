@@ -6,8 +6,9 @@ use thiserror::Error;
 use tokio::sync::RwLock as TokioRwLock;
 use tracing::trace;
 
+use crate::now_playing::NowPlaying;
+
 pub mod auth;
-pub mod poller;
 
 #[derive(Error, Debug)]
 /// Error enum for spotify requests
@@ -31,20 +32,20 @@ pub enum SpotifyClientTrackError {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-/// (Partial) Response of the spotify currently playing song endpoint
-pub struct CurrentlyPlayingResponse {
+/// (Partial) Response of the spotify currently playing song endpoint. Used both to
+/// cross-reference an SMTC-detected Spotify session against a Spotify track id for the
+/// bonus lyrics lookup, and - when the user's opted into the Spotify fallback source - as
+/// a full now-playing reading in its own right, for playback SMTC can't see locally (e.g.
+/// Spotify Connect streaming to another device). See `crate::smtc::poller`.
+pub(crate) struct CurrentlyPlayingResponse {
     /// Type of the included item, we only care if this matches "track"
     currently_playing_type: String,
     /// Item, can also be a podcast ep, but we only care about track
     item: Option<Track>,
     /// Are we currently playing this song?
-    pub is_playing: bool,
+    is_playing: bool,
     /// Playback progress
-    pub progress_ms: usize,
-    /// Instant at which `progress_ms` was accurate, compensated for request round-trip
-    /// latency (set in `SpotifyClient::get_current_track`, not part of the API response).
-    #[serde(skip, default = "Instant::now")]
-    pub measured_at: Instant,
+    progress_ms: usize,
 }
 
 impl CurrentlyPlayingResponse {
@@ -56,12 +57,6 @@ impl CurrentlyPlayingResponse {
     }
     pub fn get_artist(&self) -> Option<String> {
         self.item.as_ref().map(|track| track.get_artist().clone())
-    }
-    pub fn get_album(&self) -> Option<String> {
-        self.item.as_ref().map(|track| track.get_album().clone())
-    }
-    pub fn get_duration_sec(&self) -> Option<f64> {
-        self.item.as_ref().map(Track::get_duration_sec)
     }
     pub fn get_spotify_id(&self) -> Option<String> {
         self.item.as_ref().map(|track| track.id.clone())
@@ -109,6 +104,19 @@ struct Album {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+/// Error body Spotify sends back for a failed player command (play/pause/next/previous),
+/// e.g. `{"error": {"status": 403, "reason": "PREMIUM_REQUIRED", "message": "..."}}`.
+/// `reason` is undocumented but the values seen in practice are what we key off of.
+struct PlayerErrorBody {
+    error: PlayerErrorDetail,
+}
+#[derive(Debug, Deserialize)]
+struct PlayerErrorDetail {
+    #[serde(default)]
+    reason: String,
+}
+
 /// Spotify client state
 pub struct SpotifyClient {
     /// Our very important amazing access token
@@ -125,9 +133,12 @@ impl SpotifyClient {
         }
     }
 
-    pub async fn get_current_track(
-        &self,
-    ) -> Result<CurrentlyPlayingResponse, SpotifyClientTrackError> {
+    /// Shared by `get_current_track` and `get_now_playing`: fetches the raw response plus
+    /// the `Instant` its `progress_ms` was accurate for, compensated for request
+    /// round-trip latency (Spotify measures progress roughly when it receives our
+    /// request, i.e. about halfway through the round trip, not when we finish receiving
+    /// the response).
+    async fn fetch(&self) -> Result<(CurrentlyPlayingResponse, Instant), SpotifyClientTrackError> {
         let token_opt = self.access_token.read().await.clone();
 
         let Some(token) = token_opt else {
@@ -162,14 +173,7 @@ impl SpotifyClient {
             return Err(SpotifyClientTrackError::RateLimitsExceeded);
         }
 
-        let mut playing: CurrentlyPlayingResponse = response.json().await?;
-
-        // Spotify measured `progress_ms` roughly when it received our request, i.e. about
-        // halfway through the round trip - not when we finished receiving the response.
-        let round_trip = request_sent.elapsed();
-        playing.measured_at = Instant::now()
-            .checked_sub(round_trip / 2)
-            .unwrap_or_else(Instant::now);
+        let playing: CurrentlyPlayingResponse = response.json().await?;
 
         trace!("CurrentlyPlayingResponse {playing:?}");
 
@@ -177,51 +181,96 @@ impl SpotifyClient {
             return Err(SpotifyClientTrackError::NotATrack);
         }
 
-        Ok(playing)
+        let round_trip = request_sent.elapsed();
+        let measured_at = Instant::now()
+            .checked_sub(round_trip / 2)
+            .unwrap_or_else(Instant::now);
+
+        Ok((playing, measured_at))
+    }
+
+    pub async fn get_current_track(
+        &self,
+    ) -> Result<CurrentlyPlayingResponse, SpotifyClientTrackError> {
+        self.fetch().await.map(|(response, _)| response)
+    }
+
+    /// Full now-playing reading sourced from Spotify's own API, for the opt-in fallback
+    /// path used when SMTC has no local session to read from (e.g. playback via Spotify
+    /// Connect on another device/speaker).
+    pub async fn get_now_playing(&self) -> Result<NowPlaying, SpotifyClientTrackError> {
+        let (response, measured_at) = self.fetch().await?;
+        let item = response.item.ok_or(SpotifyClientTrackError::NotATrack)?;
+
+        Ok(NowPlaying {
+            track_title: item.name.clone(),
+            artist: item.get_artist(),
+            album: item.get_album(),
+            duration_sec: item.get_duration_sec(),
+            is_playing: response.is_playing,
+            progress_ms: response.progress_ms,
+            measured_at,
+            spotify_id: Some(item.id),
+        })
     }
 
     async fn send_player_command(
         &self,
-        request: reqwest::RequestBuilder,
+        method: reqwest::Method,
+        path: &str,
     ) -> Result<(), SpotifyClientTrackError> {
         let token_opt = self.access_token.read().await.clone();
-
         let Some(token) = token_opt else {
             return Err(SpotifyClientTrackError::NotAuthenticated);
         };
 
-        let response = request.bearer_auth(token).send().await?;
+        let response = self
+            .client
+            .request(method, format!("https://api.spotify.com/v1/me/player/{path}"))
+            .bearer_auth(token)
+            .send()
+            .await?;
 
-        match response.status().as_u16() {
-            200..=299 => Ok(()),
+        let status = response.status().as_u16();
+        if status == 403 {
+            // Spotify's play/pause/next/previous endpoints are documented to return 403
+            // for a *redundant* command (e.g. Play while already playing, or controlling
+            // a session on another device) even though playback ends up in the requested
+            // state regardless - not an auth/permission problem. Reauthenticating won't
+            // "fix" that, so only treat it as a real error when the body says the account
+            // genuinely lacks Premium (the one 403 reason that IS a real, persistent
+            // problem). See https://github.com/spotify/web-api/issues/776.
+            let reason = response
+                .json::<PlayerErrorBody>()
+                .await
+                .ok()
+                .map(|body| body.error.reason);
+            return if reason.as_deref() == Some("PREMIUM_REQUIRED") {
+                Err(SpotifyClientTrackError::Forbidden)
+            } else {
+                Ok(())
+            };
+        }
+
+        match status {
+            204 => Ok(()),
             401 => Err(SpotifyClientTrackError::TokenError),
-            403 => Err(SpotifyClientTrackError::Forbidden),
             429 => Err(SpotifyClientTrackError::RateLimitsExceeded),
-            // Includes 404 (no active device) - not much else we can tell the user.
             _ => Err(SpotifyClientTrackError::BadRequest),
         }
     }
 
     pub async fn play(&self) -> Result<(), SpotifyClientTrackError> {
-        self.send_player_command(self.client.put("https://api.spotify.com/v1/me/player/play"))
-            .await
+        self.send_player_command(reqwest::Method::PUT, "play").await
     }
-
     pub async fn pause(&self) -> Result<(), SpotifyClientTrackError> {
-        self.send_player_command(self.client.put("https://api.spotify.com/v1/me/player/pause"))
-            .await
+        self.send_player_command(reqwest::Method::PUT, "pause").await
     }
-
     pub async fn next_track(&self) -> Result<(), SpotifyClientTrackError> {
-        self.send_player_command(self.client.post("https://api.spotify.com/v1/me/player/next"))
-            .await
+        self.send_player_command(reqwest::Method::POST, "next").await
     }
-
     pub async fn previous_track(&self) -> Result<(), SpotifyClientTrackError> {
-        self.send_player_command(
-            self.client
-                .post("https://api.spotify.com/v1/me/player/previous"),
-        )
-        .await
+        self.send_player_command(reqwest::Method::POST, "previous")
+            .await
     }
 }

@@ -1,11 +1,10 @@
-use egui::{Align, Color32, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
+use egui::{Align, Color32, Label, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
 
 use crate::{
     lyrics_fetch::SongWithLyrics,
     lyrics_parser::{LyricLine, LyricPosition},
     overlay::LyricsAppUI,
     settings::{EasingModes, ProgressBarPosition},
-    spotify::CurrentlyPlayingResponse,
 };
 fn ease_in_out(t: f32, mode: EasingModes) -> f32 {
     match mode {
@@ -28,10 +27,7 @@ impl LyricsAppUI {
 
         // Make sure it's not the previous song's lyrics
         if Some(song.track_name.clone())
-            != self
-                .currently_playing
-                .as_ref()
-                .and_then(CurrentlyPlayingResponse::get_track_title)
+            != self.currently_playing.as_ref().map(|p| p.track_title.clone())
         {
             self.waiting_for_lyrics(ui);
             return;
@@ -41,6 +37,7 @@ impl LyricsAppUI {
             ui,
             song,
             super::accent_color(self.settings_cache.current_line_color),
+            self.title_max_width(ui),
         );
 
         if song.lyrics.synced_lyrics.is_empty() {
@@ -85,6 +82,15 @@ impl LyricsAppUI {
         if self.settings_cache.song_progress_bar_position == ProgressBarPosition::Bottom {
             draw_progress_bar(ui, song_progress, ui.available_width());
         }
+    }
+
+    /// Max width available for the song title before it would run into the media
+    /// controls, if they're currently shown in the top row and would otherwise collide
+    /// with a long title. `None` means no cutoff is needed.
+    fn title_max_width(&self, ui: &Ui) -> Option<f32> {
+        const GAP: f32 = 8.0;
+        let controls_x = self.top_controls_start_x(ui.ctx())?;
+        Some((controls_x - ui.cursor().left() - GAP).max(40.0))
     }
 
     /// Estimated current playback position, extrapolated from the last poll response.
@@ -248,36 +254,41 @@ impl LyricsAppUI {
     }
 
     fn waiting_for_lyrics(&mut self, ui: &mut Ui) {
+        let background = self.settings_cache.background_color;
         let Some(playing) = &self.currently_playing else {
-            Self::nothing_playing(ui);
+            Self::nothing_playing(ui, background);
             return;
         };
 
+        let max_width = self.title_max_width(ui);
         ui.vertical_centered(|ui| {
-            if let Some(title) = playing.get_track_title() {
-                ui.label(
-                    RichText::new(format!("♫  {title}"))
-                        .size(18.0)
-                        .color(Color32::from_gray(180)),
-                );
+            if !playing.track_title.is_empty() {
+                let text = RichText::new(format!("♫  {}", playing.track_title))
+                    .size(18.0)
+                    .color(super::readable_gray(background, 180));
+                draw_truncatable_label(ui, text, max_width);
             }
             ui.label(
                 RichText::new("Loading lyrics…")
                     .size(14.0)
-                    .color(Color32::from_gray(100)),
+                    .color(super::readable_gray(background, 100)),
             );
         });
     }
 
-    fn nothing_playing(ui: &mut Ui) {
+    fn nothing_playing(ui: &mut Ui, background: [u8; 3]) {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() / 2.0 - 24.0).max(0.0));
-            ui.label(RichText::new("♫").size(26.0).color(Color32::from_gray(70)));
+            ui.label(
+                RichText::new("♫")
+                    .size(26.0)
+                    .color(super::readable_gray(background, 70)),
+            );
             ui.add_space(4.0);
             ui.label(
                 RichText::new("Nothing playing")
                     .size(14.0)
-                    .color(Color32::from_gray(110)),
+                    .color(super::readable_gray(background, 110)),
             );
         });
     }
@@ -285,10 +296,11 @@ impl LyricsAppUI {
     /// No line-level timing is available for this song, so just show the full text and
     /// let the user scroll manually instead of pretending we can track their position.
     fn draw_plain_lyrics(&self, ui: &mut Ui, lines: &[String]) {
+        let background = self.settings_cache.background_color;
         ui.label(
             RichText::new("Lyrics aren't synced to playback")
                 .size(11.0)
-                .color(Color32::from_gray(120)),
+                .color(super::readable_gray(background, 120)),
         );
         ui.add_space(4.0);
 
@@ -301,7 +313,7 @@ impl LyricsAppUI {
                         ui.label(
                             RichText::new(line)
                                 .size(self.settings_cache.font_size)
-                                .color(Color32::from_gray(210)),
+                                .color(super::readable_gray(background, 210)),
                         );
                         ui.add_space(self.settings_cache.line_spacing);
                     }
@@ -310,12 +322,28 @@ impl LyricsAppUI {
     }
 }
 
-fn draw_song_header(ui: &mut Ui, song: &SongWithLyrics, accent: Color32) {
-    ui.label(
-        RichText::new(format!("♫ {} - {}", song.artist_name, song.track_name))
-            .size(11.0)
-            .color(accent),
-    );
+fn draw_song_header(ui: &mut Ui, song: &SongWithLyrics, accent: Color32, max_width: Option<f32>) {
+    let text = RichText::new(format!("♫ {} - {}", song.artist_name, song.track_name))
+        .size(11.0)
+        .color(accent);
+    draw_truncatable_label(ui, text, max_width);
+}
+
+/// Draws a single-line label, ellipsizing it to `max_width` (in the current ui's
+/// coordinate space) if given - used to keep the song title from running under the
+/// media controls when they're shown in the top row.
+fn draw_truncatable_label(ui: &mut Ui, text: RichText, max_width: Option<f32>) {
+    match max_width {
+        Some(width) => {
+            ui.scope(|ui| {
+                ui.set_max_width(width);
+                ui.add(Label::new(text).truncate());
+            });
+        }
+        None => {
+            ui.label(text);
+        }
+    }
 }
 
 /// Start/end time (ms) of the line `position` refers to, and its line index.

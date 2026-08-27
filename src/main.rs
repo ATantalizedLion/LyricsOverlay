@@ -2,8 +2,6 @@
 // Suppress the console window on Windows for release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//TODO: Settings for how much we change scale and color
-
 // Nice to haves:
 //TODO: allow offsetting lyrics, using arrow keys?
 //TODO: Logo?
@@ -21,16 +19,18 @@ use tracing_subscriber::EnvFilter;
 
 use crate::lyrics_fetch::LyricsRequestInfo;
 use crate::lyrics_fetch::SongWithLyrics;
+use crate::now_playing::NowPlaying;
 use crate::overlay::LyricsAppUI;
 use crate::runtime::start_runtime;
 use crate::settings::Settings;
-use crate::spotify::CurrentlyPlayingResponse;
 
 mod lyrics_fetch;
 mod lyrics_parser;
+mod now_playing;
 mod overlay;
 mod runtime;
 mod settings;
+mod smtc;
 mod spotify;
 mod theming;
 
@@ -38,7 +38,7 @@ mod theming;
 pub enum MessageToUI {
     AuthenticationStateUpdate(bool),
     RateLimitsExceeded,
-    CurrentlyPlaying(CurrentlyPlayingResponse),
+    CurrentlyPlaying(NowPlaying),
     NotCurrentlyPlaying(String),
     DisplayError(String),
     GotLyrics(SongWithLyrics),
@@ -47,7 +47,6 @@ pub enum MessageToUI {
 #[derive(Debug)]
 pub enum MessageToRT {
     Authenticate,
-    GetCurrentTrack,
     GetLyrics(LyricsRequestInfo),
     InvalidateToken,
     Play,
@@ -110,18 +109,28 @@ fn main() {
         }
     });
 
+    let (window_pos, window_size) = {
+        let s = rw_settings.blocking_read();
+        (s.window_pos, s.window_size)
+    };
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Lyrics Overlay")
+        .with_inner_size(window_size)
+        .with_min_inner_size([320.0, 160.0])
+        .with_decorations(false) // no window chrome
+        .with_transparent(true) // transparent background
+        .with_always_on_top()
+        .with_resizable(true)
+        // Otherwise Windows' Aero Snap maximizes the window when it's dragged to the
+        // top of the screen, which - being undecorated - leaves no way back out.
+        .with_maximize_button(false);
+    if let Some(pos) = window_pos {
+        viewport = viewport.with_position(pos);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Lyrics Overlay")
-            .with_inner_size([680.0, 340.0]) // TODO: Restore size when starting
-            .with_min_inner_size([320.0, 160.0])
-            .with_decorations(false) // no window chrome
-            .with_transparent(true) // transparent background
-            .with_always_on_top()
-            .with_resizable(true)
-            // Otherwise Windows' Aero Snap maximizes the window when it's dragged to the
-            // top of the screen, which - being undecorated - leaves no way back out.
-            .with_maximize_button(false),
+        viewport,
         renderer: eframe::Renderer::Wgpu, // EXPERIMENT: see egui-winit patch in vendor/
         ..Default::default()
     };

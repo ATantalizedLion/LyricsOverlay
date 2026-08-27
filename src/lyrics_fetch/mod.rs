@@ -13,9 +13,9 @@ use crate::{
     MessageToUI,
     lyrics_fetch::cache::LyricsCacheCheckErr,
     lyrics_parser::{SongLyrics, parse_lrc},
+    now_playing::NowPlaying,
     runtime::{Messages, RuntimeError},
     settings::Settings,
-    spotify::CurrentlyPlayingResponse,
 };
 
 mod cache;
@@ -33,8 +33,6 @@ pub enum LyricsFetcherErr {
     ReqwestError(#[from] reqwest::Error),
     #[error("Json: {0}")]
     JsonError(#[from] serde_json::Error),
-    #[error("No track in current response for fetcher")]
-    NoTrack(),
     #[error("Song lyrics could not be found")]
     SongLyricsNotFound(),
 }
@@ -85,21 +83,14 @@ impl Display for LyricsRequestInfo {
     }
 }
 impl LyricsRequestInfo {
-    pub fn from_spotify_response(
-        response: &CurrentlyPlayingResponse,
-    ) -> Result<Self, LyricsFetcherErr> {
-        if !response.is_track() {
-            return Err(LyricsFetcherErr::NoTrack());
+    pub fn from_now_playing(now_playing: &NowPlaying) -> Self {
+        Self {
+            spotify_id: now_playing.spotify_id.clone(),
+            duration_sec: now_playing.duration_sec,
+            track_name: now_playing.track_title.clone(),
+            artist_name: now_playing.artist.clone(),
+            album_name: now_playing.album.clone(),
         }
-
-        // we can safely unwrap here because all these fields are valid if response is a track
-        Ok(Self {
-            spotify_id: Some(response.get_spotify_id().unwrap()),
-            duration_sec: response.get_duration_sec().unwrap(),
-            track_name: response.get_track_title().unwrap(),
-            artist_name: response.get_artist().unwrap(),
-            album_name: response.get_album().unwrap(),
-        })
     }
 
     pub fn get_track_identifier(&self) -> String {

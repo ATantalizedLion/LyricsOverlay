@@ -1,26 +1,35 @@
 use egui::{Color32, RichText, Ui};
 
+use crate::MessageToRT;
 use crate::overlay::resize::handle_resize;
-use crate::settings::{EasingModes, MediaControlsPosition, ProgressBarPosition, Settings};
+use crate::settings::{
+    EasingModes, MediaControlsPosition, NowPlayingSource, ProgressBarPosition, Settings,
+};
 use crate::theming::{self, Theme};
 
-fn section_label(ui: &mut Ui, text: &str) {
+fn section_label(ui: &mut Ui, background: [u8; 3], text: &str) {
     ui.add_space(8.0);
     ui.label(
         RichText::new(text)
             .size(11.0)
-            .color(Color32::from_gray(130))
+            .color(super::readable_gray(background, 130))
             .strong(),
     );
     ui.add_space(2.0);
 }
 
-fn settings_row(ui: &mut Ui, label: &str, tooltip: &str, widget: impl FnOnce(&mut Ui)) {
+fn settings_row(
+    ui: &mut Ui,
+    background: [u8; 3],
+    label: &str,
+    tooltip: &str,
+    widget: impl FnOnce(&mut Ui),
+) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(label)
                 .size(12.0)
-                .color(Color32::from_gray(160)),
+                .color(super::readable_gray(background, 160)),
         )
         .on_hover_text(tooltip);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), widget);
@@ -92,7 +101,7 @@ impl super::LyricsAppUI {
                     panel_fill: Color32::TRANSPARENT,
                     window_fill: popup_fill,
                     popup_shadow: egui::Shadow::NONE,
-                    ..egui::Visuals::dark()
+                    ..super::theme_visuals(background, accent)
                 });
 
                 handle_resize(ctx, 6.0f32);
@@ -123,7 +132,7 @@ impl super::LyricsAppUI {
                 let panel_frame = egui::Frame::new()
                     .fill(Color32::from_rgb(background[0], background[1], background[2]))
                     .corner_radius(10)
-                    .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(20)))
+                    .stroke(egui::Stroke::new(1.0f32, Color32::from_white_alpha(20)))
                     .inner_margin(egui::Margin::symmetric(14, 10));
 
                 egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
@@ -140,18 +149,18 @@ impl super::LyricsAppUI {
                     egui::ScrollArea::vertical()
                         .max_height(scroll_max_height)
                         .show(ui, |ui| {
-                            display_settings(ui, &mut settings);
-                            theme_settings(ui, &mut settings, &self.custom_themes);
-                            behaviour_settings(ui, &mut settings);
-                            authentication_settings(ui, &mut settings);
-                            advanced_settings(ui, &mut settings);
+                            display_settings(ui, background, &mut settings);
+                            theme_settings(ui, background, &mut settings, &self.custom_themes);
+                            behaviour_settings(ui, background, &mut settings);
+                            self.authentication_settings(ui, background, &mut settings);
+                            advanced_settings(ui, background, &mut settings);
                         });
 
-                    reset_defaults(ui, &mut settings);
+                    reset_defaults(ui, background, &mut settings);
 
                     if format!("{settings:?}") != snapshot {
                         if let Err(e) = settings.save() {
-                            self.error_string = Some(e);
+                            self.show_error(e);
                         }
                         *self.settings.blocking_write() = settings;
                     }
@@ -161,19 +170,20 @@ impl super::LyricsAppUI {
     }
 }
 
-fn display_settings(ui: &mut Ui, settings: &mut Settings) {
-    section_label(ui, "Display");
+fn display_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
+    section_label(ui, background, "Display");
 
-    settings_row(ui, "Font size", "Size of the font used for lyrics", |ui| {
+    settings_row(ui, background, "Font size", "Size of the font used for lyrics", |ui| {
         ui.add(
             egui::Slider::new(&mut settings.font_size, 10.0..=72.0)
                 .step_by(1.0)
                 .suffix(" px")
-                .text_color(Color32::from_gray(200)),
+                .text_color(super::readable_gray(background, 200)),
         );
     });
     settings_row(
         ui,
+        background,
         "Line spacing",
         "Vertical space between lyric lines",
         |ui| {
@@ -181,12 +191,13 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
                 egui::Slider::new(&mut settings.line_spacing, 0.0..=100.0)
                     .step_by(1.0)
                     .suffix(" px")
-                    .text_color(Color32::from_gray(200)),
+                    .text_color(super::readable_gray(background, 200)),
             );
         },
     );
     settings_row(
         ui,
+        background,
         "Background opacity",
         "Opacity of the background of the main window",
         |ui| {
@@ -194,12 +205,13 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
                 egui::Slider::new(&mut settings.opacity, 0.0..=1.0)
                     .step_by(0.01)
                     .custom_formatter(|v, _| format!("{:.00}%", v * 100.))
-                    .text_color(Color32::from_gray(200)),
+                    .text_color(super::readable_gray(background, 200)),
             );
         },
     );
     settings_row(
         ui,
+        background,
         "Dim distant lines",
         "Do we reduce opacity of lines not currently being sung",
         |ui| {
@@ -208,6 +220,7 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     );
     settings_row(
         ui,
+        background,
         "Auto-hide window buttons",
         "Only show the minimize/settings/close buttons while hovering the window",
         |ui| {
@@ -216,6 +229,7 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     );
     settings_row(
         ui,
+        background,
         "Scroll smoothly",
         "Scroll smoothly, or jump from line to line",
         |ui| {
@@ -225,6 +239,7 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
     if settings.scroll_smoothly {
         settings_row(
             ui,
+            background,
             "Transition time",
             "Time spent transitioning from one line to the next",
             |ui| {
@@ -232,15 +247,15 @@ fn display_settings(ui: &mut Ui, settings: &mut Settings) {
                     egui::Slider::new(&mut settings.line_transition_ms, 0..=1000)
                         .step_by(10.0)
                         .custom_formatter(|v, _| format!("{v}ms"))
-                        .text_color(Color32::from_gray(200)),
+                        .text_color(super::readable_gray(background, 200)),
                 );
             },
         );
     }
 }
 
-fn theme_settings(ui: &mut Ui, settings: &mut Settings, custom_themes: &[Theme]) {
-    section_label(ui, "Theme");
+fn theme_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings, custom_themes: &[Theme]) {
+    section_label(ui, background, "Theme");
 
     let apply = |settings: &mut Settings, theme: &Theme| {
         settings.background_color = theme.background;
@@ -273,40 +288,43 @@ fn theme_settings(ui: &mut Ui, settings: &mut Settings, custom_themes: &[Theme])
 
     settings_row(
         ui,
+        background,
         "Background",
         "Background color of the overlay",
         |ui| {
             ui.color_edit_button_srgb(&mut settings.background_color);
         },
     );
-    settings_row(ui, "Past line", "Color of lines already sung", |ui| {
+    settings_row(ui, background, "Past line", "Color of lines already sung", |ui| {
         ui.color_edit_button_srgb(&mut settings.past_line_color);
     });
     settings_row(
         ui,
+        background,
         "Current line",
         "Color of the line currently being sung",
         |ui| {
             ui.color_edit_button_srgb(&mut settings.current_line_color);
         },
     );
-    settings_row(ui, "Future line", "Color of lines not yet sung", |ui| {
+    settings_row(ui, background, "Future line", "Color of lines not yet sung", |ui| {
         ui.color_edit_button_srgb(&mut settings.future_line_color);
     });
 }
 
-fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
-    section_label(ui, "Behaviour");
+fn behaviour_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
+    section_label(ui, background, "Behaviour");
 
-    settings_row(ui, "Refresh interval", "", |ui| {
+    settings_row(ui, background, "SMTC refresh interval", "", |ui| {
         ui.add(
-            egui::Slider::new(&mut settings.poll_interval_ms, 1000..=10000)
+            egui::Slider::new(&mut settings.smtc_poll_interval_ms, 250..=5000)
                 .suffix(" ms")
-                .text_color(Color32::from_gray(200)),
+                .text_color(super::readable_gray(background, 200)),
         );
     });
     settings_row(
         ui,
+        background,
         "Cache lyrics",
         "Do we cache any requested lyrics, improves future responsiveness and reduces load on the LRC lib",
         |ui| {
@@ -316,6 +334,7 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
 
     settings_row(
         ui,
+        background,
         "Media controls",
         "Show play/pause and skip buttons in the overlay",
         |ui| {
@@ -339,13 +358,14 @@ fn behaviour_settings(ui: &mut Ui, settings: &mut Settings) {
         },
     );
 
-    progress_bar_settings(ui, settings);
-    easing_settings(ui, settings);
+    progress_bar_settings(ui, background, settings);
+    easing_settings(ui, background, settings);
 }
 
-fn progress_bar_settings(ui: &mut Ui, settings: &mut Settings) {
+fn progress_bar_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
     settings_row(
         ui,
+        background,
         "Line progress bar",
         "Shows a bar with progress/duration of current line",
         |ui| {
@@ -368,6 +388,7 @@ fn progress_bar_settings(ui: &mut Ui, settings: &mut Settings) {
     );
     settings_row(
         ui,
+        background,
         "Song progress bar",
         "Shows a bar with progress/duration of current song",
         |ui| {
@@ -390,10 +411,11 @@ fn progress_bar_settings(ui: &mut Ui, settings: &mut Settings) {
     );
 }
 
-fn easing_settings(ui: &mut Ui, settings: &mut Settings) {
+fn easing_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
     if settings.scroll_smoothly {
         settings_row(
             ui,
+            background,
             "Position easing",
             "How the scroll eases into each line",
             |ui| {
@@ -408,7 +430,7 @@ fn easing_settings(ui: &mut Ui, settings: &mut Settings) {
         );
     }
 
-    settings_row(ui, "Color easing", "Ease color?", |ui| {
+    settings_row(ui, background, "Color easing", "Ease color?", |ui| {
         egui::ComboBox::from_id_salt("color_ease")
             .selected_text(settings.ease_color.as_str())
             .show_ui(ui, |ui| {
@@ -419,43 +441,136 @@ fn easing_settings(ui: &mut Ui, settings: &mut Settings) {
     });
 }
 
-fn authentication_settings(ui: &mut Ui, settings: &mut Settings) {
-    section_label(ui, "Authentication");
+impl super::LyricsAppUI {
+    /// Lyrics and playback controls already work with no setup via Windows' own media
+    /// controls - this section is entirely optional, and only unlocks Spotify's own
+    /// (richer) lyrics as a bonus when the active session is Spotify.
+    fn authentication_settings(&mut self, ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
+        section_label(ui, background, "Spotify (optional)");
 
-    settings_row(
-        ui,
-        "Spotify developer Client ID",
-        "Client ID as found in spotify developer dashboard",
-        |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.client_id)
-                    .desired_width(120.0)
-                    .text_color(Color32::from_gray(200)),
-            );
-        },
-    );
+        ui.label(
+            RichText::new(
+                "Lyrics work with no setup. Connect Spotify for its own bonus lyrics source.",
+            )
+            .size(11.0)
+            .color(super::readable_gray(background, 120)),
+        );
+        ui.add_space(4.0);
 
-    settings_row(
-        ui,
-        "Spotify developer Client Secret",
-        "Client Secret as found in spotify developer dashboard",
-        |ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut settings.client_secret)
-                    .desired_width(120.0)
-                    .text_color(Color32::from_gray(200))
-                    .password(true),
-            );
-        },
-    );
+        settings_row(
+            ui,
+            background,
+            "Spotify developer Client ID",
+            "Client ID as found in spotify developer dashboard",
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.client_id)
+                        .desired_width(120.0)
+                        .text_color(super::readable_gray(background, 200)),
+                );
+            },
+        );
+
+        settings_row(
+            ui,
+            background,
+            "Spotify developer Client Secret",
+            "Client Secret as found in spotify developer dashboard",
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.client_secret)
+                        .desired_width(120.0)
+                        .text_color(super::readable_gray(background, 200))
+                        .password(true),
+                );
+            },
+        );
+
+        settings_row(
+            ui,
+            background,
+            "sp_dc cookie",
+            "Value of the 'sp_dc' cookie from a logged-in open.spotify.com session - \
+             required (in addition to Client ID/Secret) for Spotify's own lyrics",
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut settings.sp_dc)
+                        .desired_width(120.0)
+                        .text_color(super::readable_gray(background, 200))
+                        .password(true),
+                );
+            },
+        );
+
+        ui.add_space(4.0);
+        self.connection_settings(ui, background, settings);
+    }
+
+    fn connection_settings(&mut self, ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
+        settings_row(
+            ui,
+            background,
+            if self.is_auth {
+                "Connected"
+            } else {
+                "Not connected"
+            },
+            "",
+            |ui| {
+                if self.is_auth {
+                    if ui.button("Disconnect").clicked() {
+                        let _ = self.tx.try_send(MessageToRT::InvalidateToken);
+                    }
+                } else {
+                    let has_credentials =
+                        !settings.client_id.is_empty() && !settings.client_secret.is_empty();
+                    ui.add_enabled_ui(has_credentials, |ui| {
+                        if ui.button("Connect").clicked() {
+                            let _ = self.tx.try_send(MessageToRT::Authenticate);
+                        }
+                    });
+                }
+            },
+        );
+
+        let is_auth = self.is_auth;
+        settings_row(
+            ui,
+            background,
+            "Now-playing source",
+            "Which source to check first for what's playing and to control - the other is \
+             used as a fallback when the preferred one has nothing (e.g. Spotify Connect \
+             playing on another device/speaker, which Windows can't see). The Spotify \
+             options need being connected above.",
+            |ui| {
+                ui.add_enabled_ui(is_auth, |ui| {
+                    egui::ComboBox::from_id_salt("now_playing_source")
+                        .selected_text(settings.now_playing_source.as_str())
+                        .show_ui(ui, |ui| {
+                            for source in [
+                                NowPlayingSource::SmtcOnly,
+                                NowPlayingSource::PreferSmtc,
+                                NowPlayingSource::PreferSpotify,
+                            ] {
+                                ui.selectable_value(
+                                    &mut settings.now_playing_source,
+                                    source,
+                                    source.as_str(),
+                                );
+                            }
+                        });
+                });
+            },
+        );
+    }
 }
 
-fn advanced_settings(ui: &mut Ui, settings: &mut Settings) {
+fn advanced_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
     ui.add_space(8.0);
     egui::CollapsingHeader::new(
         RichText::new("Advanced")
             .size(11.0)
-            .color(Color32::from_gray(130))
+            .color(super::readable_gray(background, 130))
             .strong(),
     )
     .default_open(false)
@@ -463,18 +578,19 @@ fn advanced_settings(ui: &mut Ui, settings: &mut Settings) {
         if settings.caching_enabled {
             settings_row(
                 ui,
+                background,
                 "Cache folder",
                 "Where do you want to store cache?",
                 |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut settings.cache_folder)
                             .desired_width(120.0)
-                            .text_color(Color32::from_gray(200)),
+                            .text_color(super::readable_gray(background, 200)),
                     );
                 },
             );
         }
-        settings_row(ui, "Log level", "Log level, what more can I say", |ui| {
+        settings_row(ui, background, "Log level", "Log level, what more can I say", |ui| {
             egui::ComboBox::from_id_salt("log_level")
                 .selected_text(settings.log_level.as_str())
                 .show_ui(ui, |ui| {
@@ -486,7 +602,7 @@ fn advanced_settings(ui: &mut Ui, settings: &mut Settings) {
     });
 }
 
-fn reset_defaults(ui: &mut Ui, settings: &mut Settings) {
+fn reset_defaults(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
         // Arm on first click, only reset if confirmed with a second click within a few seconds.
@@ -496,10 +612,13 @@ fn reset_defaults(ui: &mut Ui, settings: &mut Settings) {
             .data(|d| d.get_temp::<f64>(armed_id))
             .is_some_and(|armed_at| now - armed_at < 4.0);
 
+        // The armed (destructive-confirmation) color stays a fixed alert red regardless
+        // of theme - that's a deliberate, universally-recognizable warning color, not
+        // themed body text.
         let (text, color) = if armed {
             ("Click again to confirm", Color32::from_rgb(210, 90, 90))
         } else {
-            ("Reset defaults", Color32::from_gray(110))
+            ("Reset defaults", super::readable_gray(background, 110))
         };
 
         let clicked = ui

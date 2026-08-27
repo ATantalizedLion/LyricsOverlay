@@ -4,9 +4,22 @@ use crate::{MessageToRT, overlay::LyricsAppUI, settings::MediaControlsPosition};
 
 impl LyricsAppUI {
     pub(super) fn media_controls_ui(&mut self, ctx: &Context) {
+        let Some((pos, _is_top)) = self.media_controls_layout(ctx) else {
+            return;
+        };
+
+        egui::Area::new("media_controls".into())
+            .fixed_pos(pos)
+            .show(ctx, |ui| self.media_controls_row(ui));
+    }
+
+    /// Fixed position of the media controls row and whether it's anchored to the top,
+    /// if the controls are currently visible (accounts for `TopHover`/`BottomHover`
+    /// needing an active pointer hover).
+    fn media_controls_layout(&self, ctx: &Context) -> Option<(egui::Pos2, bool)> {
         let position = self.settings_cache.media_controls_position;
         if position == MediaControlsPosition::Hidden {
-            return;
+            return None;
         }
 
         let hover_only = matches!(
@@ -14,7 +27,7 @@ impl LyricsAppUI {
             MediaControlsPosition::TopHover | MediaControlsPosition::BottomHover
         );
         if hover_only && ctx.input(|i| i.pointer.hover_pos()).is_none() {
-            return;
+            return None;
         }
 
         let is_top = matches!(
@@ -32,9 +45,15 @@ impl LyricsAppUI {
             egui::pos2(full_width / 2.0 - row_width / 2.0, full_height - 34.0)
         };
 
-        egui::Area::new("media_controls".into())
-            .fixed_pos(pos)
-            .show(ctx, |ui| self.media_controls_row(ui));
+        Some((pos, is_top))
+    }
+
+    /// X coordinate (in window space) where the media controls start, if they're
+    /// currently visible in the top row - i.e. where the song title needs to stop to
+    /// avoid overlapping them.
+    pub(super) fn top_controls_start_x(&self, ctx: &Context) -> Option<f32> {
+        let (pos, is_top) = self.media_controls_layout(ctx)?;
+        is_top.then_some(pos.x)
     }
 
     fn media_controls_row(&mut self, ui: &mut Ui) {
