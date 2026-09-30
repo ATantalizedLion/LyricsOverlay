@@ -4,8 +4,10 @@ use crate::MessageToRT;
 use crate::overlay::resize::handle_resize;
 use crate::settings::{
     EasingModes, MediaControlsPosition, NowPlayingSource, ProgressBarPosition, Settings,
+    TranslationDisplay, TranslationFilter,
 };
 use crate::theming::{self, Theme};
+use crate::translation::{LANGUAGES, language_name, primary_language};
 
 fn section_label(ui: &mut Ui, background: [u8; 3], text: &str) {
     ui.add_space(8.0);
@@ -64,7 +66,11 @@ impl super::LyricsAppUI {
             && ui
                 .add(egui::Button::selectable(
                     self.settings_open,
-                    RichText::new("⚙").size(14.0).color(accent),
+                    RichText::new("⚙").size(14.0).color(if self.settings_open {
+                        super::text_on(accent)
+                    } else {
+                        accent
+                    }),
                 ))
                 .clicked()
         {
@@ -152,6 +158,7 @@ impl super::LyricsAppUI {
                             display_settings(ui, background, &mut settings);
                             theme_settings(ui, background, &mut settings, &self.custom_themes);
                             behaviour_settings(ui, background, &mut settings);
+                            translation_settings(ui, background, &mut settings);
                             self.authentication_settings(ui, background, &mut settings);
                             advanced_settings(ui, background, &mut settings);
                         });
@@ -438,6 +445,123 @@ fn easing_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
                     ui.selectable_value(&mut settings.ease_color, mode, mode.as_str());
                 }
             });
+    });
+}
+
+fn translation_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
+    section_label(ui, background, "Translation");
+
+    settings_row(
+        ui,
+        background,
+        "Translate lyrics",
+        "Automatically translate lyrics into another language (via Google Translate)",
+        |ui| {
+            ui.checkbox(&mut settings.translation_enabled, "");
+        },
+    );
+    if !settings.translation_enabled {
+        return;
+    }
+
+    settings_row(
+        ui,
+        background,
+        "Translate to",
+        "Language lyrics get translated into. Lyrics already in this language are left as is",
+        |ui| {
+            egui::ComboBox::from_id_salt("translation_target")
+                .selected_text(language_name(&settings.translation_target))
+                .show_ui(ui, |ui| {
+                    for lang in LANGUAGES {
+                        ui.selectable_value(
+                            &mut settings.translation_target,
+                            lang.code.to_owned(),
+                            lang.name,
+                        );
+                    }
+                });
+        },
+    );
+    settings_row(
+        ui,
+        background,
+        "Show translation",
+        "Show the translation below each original line, or instead of it",
+        |ui| {
+            egui::ComboBox::from_id_salt("translation_display")
+                .selected_text(settings.translation_display.as_str())
+                .show_ui(ui, |ui| {
+                    for display in [
+                        TranslationDisplay::BelowOriginal,
+                        TranslationDisplay::ReplaceOriginal,
+                    ] {
+                        ui.selectable_value(
+                            &mut settings.translation_display,
+                            display,
+                            display.as_str(),
+                        );
+                    }
+                });
+        },
+    );
+    settings_row(
+        ui,
+        background,
+        "Languages to translate",
+        "Translate every language except the ones selected below, or only the selected ones",
+        |ui| {
+            egui::ComboBox::from_id_salt("translation_filter")
+                .selected_text(settings.translation_filter.as_str())
+                .show_ui(ui, |ui| {
+                    for filter in [TranslationFilter::AllExcept, TranslationFilter::OnlyThese] {
+                        ui.selectable_value(
+                            &mut settings.translation_filter,
+                            filter,
+                            filter.as_str(),
+                        );
+                    }
+                });
+        },
+    );
+
+    language_toggles(ui, background, settings);
+}
+
+/// Toggle per language for the translation black/whitelist.
+fn language_toggles(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
+    let target = primary_language(&settings.translation_target);
+    ui.horizontal_wrapped(|ui| {
+        for lang in LANGUAGES
+            .iter()
+            .filter(|l| primary_language(l.code) != target)
+        {
+            let position = settings
+                .translation_languages
+                .iter()
+                .position(|l| primary_language(l) == primary_language(lang.code));
+            // Selected toggles are filled with the accent color, so their text has to
+            // contrast with that rather than with the panel background.
+            let text_color = if position.is_some() {
+                super::text_on(ui.visuals().selection.bg_fill)
+            } else {
+                super::readable_gray(background, 160)
+            };
+            if ui
+                .selectable_label(
+                    position.is_some(),
+                    RichText::new(lang.name).size(11.0).color(text_color),
+                )
+                .clicked()
+            {
+                match position {
+                    Some(i) => {
+                        settings.translation_languages.remove(i);
+                    }
+                    None => settings.translation_languages.push(lang.code.to_owned()),
+                }
+            }
+        }
     });
 }
 

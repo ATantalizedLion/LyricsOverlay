@@ -23,6 +23,8 @@ use crate::spotify::SpotifyClient;
 use crate::spotify::SpotifyClientTrackError;
 use crate::spotify::auth::SpotifyAuthClient;
 use crate::spotify::auth::SpotifyClientAuthError;
+use crate::translation::TranslationError;
+use crate::translation::Translator;
 
 use thiserror::Error;
 
@@ -36,6 +38,8 @@ pub enum RuntimeError {
     Smtc(#[from] SmtcError),
     #[error("Spotify playback command failed: {0}")]
     Spotify(#[from] SpotifyClientTrackError),
+    #[error("Translating lyrics failed: {0}")]
+    Translation(#[from] TranslationError),
 }
 
 /// The four playback controls, dispatched to whichever source is currently active - see
@@ -156,6 +160,7 @@ pub async fn start_runtime(
     };
     let spotify_client = Arc::new(SpotifyClient::new(token_handle));
     let lyrics_fetcher = Arc::new(LyricsFetcher::new(settings.clone()));
+    let translator = Arc::new(Translator::new(settings.clone()));
 
     // Windows System Media Transport Controls: works with whatever's playing anywhere,
     // no auth needed. On the rare init failure, the app degrades to showing an error
@@ -190,6 +195,7 @@ pub async fn start_runtime(
         let tx_ui = tx_to_ui.clone();
         let auth = spotify_auth_client.clone();
         let lyrics = lyrics_fetcher.clone();
+        let translator = translator.clone();
         let smtc = smtc_client.clone();
         let spotify = spotify_client.clone();
         let settings = settings.clone();
@@ -202,6 +208,7 @@ pub async fn start_runtime(
                 MessageToRT::Authenticate => authenticate(auth).await,
                 MessageToRT::InvalidateToken => invalidate(auth).await,
                 MessageToRT::GetLyrics(request) => lyrics.get_lyrics(request).await,
+                MessageToRT::TranslateLyrics(request) => translator.translate(request).await,
                 MessageToRT::Play => {
                     dispatch_playback(PlaybackAction::Play, smtc, spotify, settings).await
                 }

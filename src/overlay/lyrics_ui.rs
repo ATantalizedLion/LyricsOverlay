@@ -4,7 +4,8 @@ use crate::{
     lyrics_fetch::SongWithLyrics,
     lyrics_parser::{LyricLine, LyricPosition},
     overlay::LyricsAppUI,
-    settings::{EasingModes, ProgressBarPosition},
+    settings::{EasingModes, ProgressBarPosition, TranslationDisplay},
+    translation::language_name,
 };
 fn ease_in_out(t: f32, mode: EasingModes) -> f32 {
     match mode {
@@ -44,7 +45,7 @@ impl LyricsAppUI {
             if song.lyrics.plain_lyrics.is_empty() {
                 self.waiting_for_lyrics(ui);
             } else {
-                self.draw_plain_lyrics(ui, &song.lyrics.plain_lyrics);
+                self.draw_plain_lyrics(ui, &song.lyrics.plain_lyrics, translated_lines(song));
             }
             return;
         }
@@ -67,6 +68,7 @@ impl LyricsAppUI {
         let new_offsets = self.draw_lyric_lines(
             ui,
             synced_lyrics,
+            translated_lines(song),
             scroll_y,
             center_bias,
             target_line,
@@ -181,6 +183,7 @@ impl LyricsAppUI {
         &self,
         ui: &mut Ui,
         synced_lyrics: &[LyricLine],
+        translation: Option<&[String]>,
         scroll_y: f32,
         center_bias: f32,
         target_line: f32,
@@ -220,12 +223,28 @@ impl LyricsAppUI {
                         };
 
                         let color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+                        let translated = translation_for(translation, i);
+                        let replace = self.settings_cache.translation_display
+                            == TranslationDisplay::ReplaceOriginal;
                         let label_resp = ui.label(
-                            RichText::new(&line.text)
+                            RichText::new(translated.filter(|_| replace).unwrap_or(&line.text))
                                 .size(self.settings_cache.font_size)
                                 .color(color)
                                 .strong(),
                         );
+                        if let Some(translated) = translated.filter(|_| !replace) {
+                            let dimmed = Color32::from_rgba_unmultiplied(
+                                r,
+                                g,
+                                b,
+                                (f32::from(alpha) * 0.75) as u8,
+                            );
+                            ui.label(
+                                RichText::new(translated)
+                                    .size(self.settings_cache.font_size * TRANSLATION_SCALE)
+                                    .color(dimmed),
+                            );
+                        }
 
                         if i == current_index {
                             let bar_width = label_resp.rect.width();
@@ -295,7 +314,7 @@ impl LyricsAppUI {
 
     /// No line-level timing is available for this song, so just show the full text and
     /// let the user scroll manually instead of pretending we can track their position.
-    fn draw_plain_lyrics(&self, ui: &mut Ui, lines: &[String]) {
+    fn draw_plain_lyrics(&self, ui: &mut Ui, lines: &[String], translation: Option<&[String]>) {
         let background = self.settings_cache.background_color;
         ui.label(
             RichText::new("Lyrics aren't synced to playback")
@@ -309,12 +328,22 @@ impl LyricsAppUI {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                    for line in lines {
+                    for (i, line) in lines.iter().enumerate() {
+                        let translated = translation_for(translation, i);
+                        let replace = self.settings_cache.translation_display
+                            == TranslationDisplay::ReplaceOriginal;
                         ui.label(
-                            RichText::new(line)
+                            RichText::new(translated.filter(|_| replace).unwrap_or(line))
                                 .size(self.settings_cache.font_size)
                                 .color(super::readable_gray(background, 210)),
                         );
+                        if let Some(translated) = translated.filter(|_| !replace) {
+                            ui.label(
+                                RichText::new(translated)
+                                    .size(self.settings_cache.font_size * TRANSLATION_SCALE)
+                                    .color(super::readable_gray(background, 150)),
+                            );
+                        }
                         ui.add_space(self.settings_cache.line_spacing);
                     }
                 });
@@ -322,8 +351,32 @@ impl LyricsAppUI {
     }
 }
 
+/// Font size of a translated line relative to the original line above it
+const TRANSLATION_SCALE: f32 = 0.7;
+
+/// The current song's translated lines, if it has been translated.
+fn translated_lines(song: &SongWithLyrics) -> Option<&[String]> {
+    song.translation.as_ref().map(|t| t.lines.as_slice())
+}
+
+/// Translation of line `i`, if there's one worth showing.
+fn translation_for(translation: Option<&[String]>, i: usize) -> Option<&str> {
+    translation?
+        .get(i)
+        .map(String::as_str)
+        .filter(|t| !t.is_empty())
+}
+
 fn draw_song_header(ui: &mut Ui, song: &SongWithLyrics, accent: Color32, max_width: Option<f32>) {
-    let text = RichText::new(format!("♫ {} - {}", song.artist_name, song.track_name))
+    let translated_from = song
+        .translation
+        .as_ref()
+        .map(|t| format!("  ·  translated from {}", language_name(&t.source_lang)))
+        .unwrap_or_default();
+    let text = RichText::new(format!(
+        "♫ {} - {}{translated_from}",
+        song.artist_name, song.track_name
+    ))
         .size(11.0)
         .color(accent);
     draw_truncatable_label(ui, text, max_width);

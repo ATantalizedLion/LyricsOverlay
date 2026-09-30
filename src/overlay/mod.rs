@@ -16,6 +16,7 @@ use crate::{
     overlay::resize::handle_resize,
     settings::Settings,
     theming::{self, Theme},
+    translation::TranslationRequest,
 };
 
 mod lyrics_ui;
@@ -53,6 +54,10 @@ pub struct LyricsAppUI {
     /// measured y of each line, updated every frame
     line_top_offsets: Vec<f32>,
 
+    /// Translation-related settings the current translation was requested with, to
+    /// re-request when they change - see `refresh_translation_on_settings_change`.
+    translation_settings_key: String,
+
     /// User-defined themes loaded from the `themes/` folder at startup
     custom_themes: Vec<Theme>,
 
@@ -86,6 +91,7 @@ impl LyricsAppUI {
             settings_cache: settings.blocking_read().clone(),
             settings_open: false,
             line_top_offsets: vec![],
+            translation_settings_key: String::new(),
             custom_themes: theming::load_custom_themes(),
             last_window_save: Instant::now(),
             last_known_window_rect: None,
@@ -128,6 +134,21 @@ impl LyricsAppUI {
                 MessageToUI::GotLyrics(song) => {
                     trace!("Received SongWithLyrics!: {:?}", song);
                     self.current_song_with_lyrics = Some(song);
+                    self.request_translation();
+                }
+                MessageToUI::GotTranslation {
+                    track_identifier,
+                    translation,
+                } => {
+                    // Drop responses for a previous song, or for a since-changed target
+                    if translation.target_lang == self.settings_cache.translation_target
+                        && let Some(song) = self
+                            .current_song_with_lyrics
+                            .as_mut()
+                            .filter(|s| s.track_identifier == track_identifier)
+                    {
+                        song.translation = Some(translation);
+                    }
                 }
                 MessageToUI::NotCurrentlyPlaying(reason) => {
                     trace!("Not currently playing: {reason}");
@@ -139,6 +160,48 @@ impl LyricsAppUI {
                 }
             }
         }
+    }
+
+    /// Asks the runtime to translate the current song's lyrics, if translation is on.
+    /// Whether it actually gets translated (language filter etc.) is up to the runtime.
+    fn request_translation(&self) {
+        if !self.settings_cache.translation_enabled {
+            return;
+        }
+        let Some(song) = &self.current_song_with_lyrics else {
+            return;
+        };
+        let lines = if song.lyrics.synced_lyrics.is_empty() {
+            song.lyrics.plain_lyrics.clone()
+        } else {
+            song.lyrics
+                .synced_lyrics
+                .iter()
+                .map(|l| l.text.clone())
+                .collect()
+        };
+        let _ = self.tx.try_send(MessageToRT::TranslateLyrics(TranslationRequest {
+            track_identifier: song.track_identifier.clone(),
+            lines,
+        }));
+    }
+
+    /// Drops the current translation and requests a fresh one whenever a setting that
+    /// affects it changes, so e.g. picking another target language applies right away.
+    fn refresh_translation_on_settings_change(&mut self) {
+        let s = &self.settings_cache;
+        let key = format!(
+            "{}|{}|{:?}|{:?}",
+            s.translation_enabled, s.translation_target, s.translation_filter, s.translation_languages
+        );
+        if key == self.translation_settings_key {
+            return;
+        }
+        self.translation_settings_key = key;
+        if let Some(song) = self.current_song_with_lyrics.as_mut() {
+            song.translation = None;
+        }
+        self.request_translation();
     }
 
     /// Sets the error toast's message and (re)starts its auto-dismiss timer.
@@ -352,6 +415,8 @@ impl eframe::App for LyricsAppUI {
 
         self.message_loop();
 
+        self.refresh_translation_on_settings_change();
+
         self.draw_window_controls(ctx, full_width);
 
         // Transparent outer frame, we use this for allowing dragging and resizing
@@ -430,11 +495,22 @@ pub(super) fn readable_gray(background: [u8; 3], value_on_dark: u8) -> Color32 {
     Color32::from_gray(value as u8)
 }
 
+/// Black or white, whichever stays legible on top of `fill` - for text/icons drawn on an
+/// accent-filled (selected) widget, where an accent-colored label would vanish.
+pub(super) fn text_on(fill: Color32) -> Color32 {
+    if luminance([fill.r(), fill.g(), fill.b()]) < 128.0 {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
 /// Base `egui::Visuals` for a panel painted directly on `background`: dark widget chrome
 /// (text-edit fill, slider track, scrollbar, ...) for a dark background, light chrome for
 /// a light one, so those don't default to dark-on-dark or light-on-light for a custom
 /// theme. The selection highlight (checked/selected widget backgrounds) is tied to
-/// `accent` instead of egui's default blue, so it actually reflects the active theme.
+/// `accent` instead of egui's default blue, so it actually reflects the active theme,
+/// with selected widgets' text contrasting against that accent fill.
 pub(super) fn theme_visuals(background: [u8; 3], accent: Color32) -> egui::Visuals {
     let base = if luminance(background) < 128.0 {
         egui::Visuals::dark()
@@ -444,7 +520,7 @@ pub(super) fn theme_visuals(background: [u8; 3], accent: Color32) -> egui::Visua
     egui::Visuals {
         selection: egui::style::Selection {
             bg_fill: accent,
-            stroke: egui::Stroke::new(1.0f32, accent),
+            stroke: egui::Stroke::new(1.0f32, text_on(accent)),
         },
         ..base
     }

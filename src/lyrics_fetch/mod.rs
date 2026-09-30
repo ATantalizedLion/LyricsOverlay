@@ -13,6 +13,7 @@ use crate::{
     MessageToUI,
     lyrics_fetch::cache::LyricsCacheCheckErr,
     lyrics_parser::{SongLyrics, parse_lrc},
+    translation::Translation,
     now_playing::NowPlaying,
     runtime::{Messages, RuntimeError},
     settings::Settings,
@@ -44,6 +45,10 @@ pub struct SongWithLyrics {
     pub track_name: String,
     pub artist_name: String,
     album_name: String,
+    /// See `LyricsRequestInfo::get_track_identifier`
+    pub track_identifier: String,
+    /// Arrives separately after the lyrics themselves, if translation applies at all
+    pub translation: Option<Translation>,
 }
 
 impl Display for SongWithLyrics {
@@ -58,6 +63,8 @@ impl SongWithLyrics {
     pub fn new(lyrics: SongLyrics, req: LyricsRequestInfo) -> Self {
         Self {
             lyrics,
+            track_identifier: req.get_track_identifier(),
+            translation: None,
             duration_sec: req.duration_sec,
             track_name: req.track_name,
             artist_name: req.artist_name,

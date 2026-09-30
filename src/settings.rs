@@ -4,6 +4,8 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
+use crate::translation::primary_language;
+
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -76,6 +78,16 @@ pub struct Settings {
     /// device/speaker that SMTC can't see, or vice versa). Requires being connected (see
     /// Client ID/Secret below) for either Spotify option to do anything.
     pub now_playing_source: NowPlayingSource,
+    /// Automatically translate lyrics into `translation_target`
+    pub translation_enabled: bool,
+    /// Language code lyrics get translated into, see `translation::LANGUAGES`
+    pub translation_target: String,
+    /// Whether `translation_languages` lists languages to skip or the only ones to translate
+    pub translation_filter: TranslationFilter,
+    /// Language codes the filter applies to
+    pub translation_languages: Vec<String>,
+    /// How translated lines are shown
+    pub translation_display: TranslationDisplay,
 }
 
 impl Default for Settings {
@@ -113,6 +125,11 @@ impl Default for Settings {
             window_pos: None,
             window_size: [680.0, 340.0],
             now_playing_source: NowPlayingSource::SmtcOnly,
+            translation_enabled: false,
+            translation_target: "en".into(),
+            translation_filter: TranslationFilter::AllExcept,
+            translation_languages: vec![],
+            translation_display: TranslationDisplay::BelowOriginal,
         }
     }
 }
@@ -132,6 +149,23 @@ impl Settings {
 
     pub fn redirect_url(&self) -> String {
         format!("http://{}:{}", self.host, self.port)
+    }
+
+    /// Whether lyrics detected as `lang` should be translated, per the target language
+    /// and the black/whitelist.
+    pub fn should_translate_from(&self, lang: &str) -> bool {
+        let lang = primary_language(lang);
+        if lang.is_empty() || lang == primary_language(&self.translation_target) {
+            return false;
+        }
+        let listed = self
+            .translation_languages
+            .iter()
+            .any(|l| primary_language(l) == lang);
+        match self.translation_filter {
+            TranslationFilter::AllExcept => !listed,
+            TranslationFilter::OnlyThese => listed,
+        }
     }
 
     /// Serialize the current state back to `config.toml`.
@@ -218,5 +252,62 @@ impl NowPlayingSource {
             Self::PreferSmtc => "Windows, then Spotify",
             Self::PreferSpotify => "Spotify, then Windows",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum TranslationFilter {
+    /// Translate everything except the listed languages
+    #[default]
+    AllExcept,
+    /// Translate only the listed languages
+    OnlyThese,
+}
+impl TranslationFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AllExcept => "All except selected",
+            Self::OnlyThese => "Only selected",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum TranslationDisplay {
+    /// Smaller translated line underneath each original line
+    #[default]
+    BelowOriginal,
+    /// Show only the translation
+    ReplaceOriginal,
+}
+impl TranslationDisplay {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BelowOriginal => "Below original",
+            Self::ReplaceOriginal => "Replace original",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translation_filter() {
+        let mut settings = Settings {
+            translation_target: "en".into(),
+            translation_languages: vec!["nl".into(), "de".into()],
+            ..Settings::default()
+        };
+        assert!(settings.should_translate_from("ja"));
+        assert!(!settings.should_translate_from("nl"));
+        assert!(!settings.should_translate_from("en"));
+
+        settings.translation_filter = TranslationFilter::OnlyThese;
+        settings.translation_languages = vec!["ja".into(), "zh-CN".into()];
+        assert!(settings.should_translate_from("ja"));
+        assert!(settings.should_translate_from("zh-TW"));
+        assert!(!settings.should_translate_from("de"));
     }
 }

@@ -23,6 +23,7 @@ use crate::now_playing::NowPlaying;
 use crate::overlay::LyricsAppUI;
 use crate::runtime::start_runtime;
 use crate::settings::Settings;
+use crate::translation::{Translation, TranslationRequest};
 
 mod lyrics_fetch;
 mod lyrics_parser;
@@ -33,6 +34,7 @@ mod settings;
 mod smtc;
 mod spotify;
 mod theming;
+mod translation;
 
 #[derive(Debug)]
 pub enum MessageToUI {
@@ -42,12 +44,17 @@ pub enum MessageToUI {
     NotCurrentlyPlaying(String),
     DisplayError(String),
     GotLyrics(SongWithLyrics),
+    GotTranslation {
+        track_identifier: String,
+        translation: Translation,
+    },
 }
 
 #[derive(Debug)]
 pub enum MessageToRT {
     Authenticate,
     GetLyrics(LyricsRequestInfo),
+    TranslateLyrics(TranslationRequest),
     InvalidateToken,
     Play,
     Pause,
