@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use tracing::trace;
 use crate::{
     lyrics_fetch::{LyricsFetcher, LyricsRequestInfo},
     lyrics_parser::SongLyrics,
+    paths,
 };
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -44,7 +45,7 @@ pub enum LyricsCacheCreateErr {
 impl LyricsFetcher {
     async fn track_cache_dir(&self, req: &LyricsRequestInfo) -> PathBuf {
         let binding = self.settings.read().await.cache_folder.clone();
-        Path::new(&binding).join(req.get_track_identifier())
+        paths::resolve(&binding).join(req.get_track_identifier())
     }
 
     pub(super) async fn check_cache(

@@ -16,7 +16,7 @@ use tokio::sync::RwLock as TokioRwLock;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    MessageToUI,
+    MessageToUI, paths,
     runtime::{Messages, RuntimeError},
     settings::Settings,
 };
@@ -177,7 +177,7 @@ impl Translator {
         }
 
         let cache_file = settings.caching_enabled.then(|| {
-            Path::new(&settings.cache_folder)
+            paths::resolve(&settings.cache_folder)
                 .join(&req.track_identifier)
                 .join(format!("translation.{target}.json"))
         });

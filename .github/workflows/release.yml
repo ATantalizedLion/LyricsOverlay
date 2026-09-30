@@ -1,0 +1,51 @@
+# Builds the Windows exe and publishes it as a GitHub Release whenever a version tag is
+# pushed. To release: bump `version` in Cargo.toml, commit, then
+#   git tag v0.2.0 && git push origin v0.2.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check tag matches Cargo.toml version
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item target/release/lyrics_overlay.exe LyricsOverlay.exe
+          $hash = (Get-FileHash LyricsOverlay.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  LyricsOverlay.exe" | Out-File -Encoding ascii LyricsOverlay.exe.sha256
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" LyricsOverlay.exe LyricsOverlay.exe.sha256 \
+            --title "$GITHUB_REF_NAME" --generate-notes

@@ -283,7 +283,7 @@ fn theme_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings, cus
             for theme in custom_themes {
                 if ui
                     .button(&theme.name)
-                    .on_hover_text("Custom theme from the themes/ folder")
+                    .on_hover_text("Custom theme from the themes folder (see Advanced > Data folder)")
                     .clicked()
                 {
                     apply(settings, theme);
@@ -704,7 +704,7 @@ fn advanced_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) 
                 ui,
                 background,
                 "Cache folder",
-                "Where do you want to store cache?",
+                "Where cached lyrics and translations are stored - relative to the data folder unless an absolute path",
                 |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut settings.cache_folder)
@@ -714,6 +714,19 @@ fn advanced_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) 
                 },
             );
         }
+        settings_row(
+            ui,
+            background,
+            "Data folder",
+            "Where config, cache, logs and custom themes are stored",
+            |ui| {
+                if ui.button("Open").clicked() {
+                    let _ = std::process::Command::new("explorer")
+                        .arg(crate::paths::data_dir())
+                        .spawn();
+                }
+            },
+        );
         settings_row(ui, background, "Log level", "Log level, what more can I say", |ui| {
             egui::ComboBox::from_id_salt("log_level")
                 .selected_text(settings.log_level.as_str())

@@ -2174,6 +2174,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "lyrics_overlay"
+version = "0.1.0"
+dependencies = [
+ "config",
+ "eframe",
+ "egui",
+ "hmac",
+ "oauth2",
+ "oneshot",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha1",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "warp",
+ "webbrowser",
+ "whatlang",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3809,33 +3836,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eda41003dc44290527a59b13432d4a0379379fa074b70174882adfbdfd917844"
 dependencies = [
  "bitflags 2.13.1",
-]
-
-[[package]]
-name = "spotify_lyrics"
-version = "0.1.0"
-dependencies = [
- "config",
- "eframe",
- "egui",
- "hmac",
- "oauth2",
- "oneshot",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "sha1",
- "thiserror 2.0.19",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "warp",
- "webbrowser",
- "whatlang",
- "windows 0.62.2",
 ]
 
 [[package]]

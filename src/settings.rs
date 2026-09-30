@@ -4,7 +4,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
-use crate::translation::primary_language;
+use crate::{paths, translation::primary_language};
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,7 +38,7 @@ pub struct Settings {
     pub line_spacing: f32,
     /// Do we cache found lyrics
     pub caching_enabled: bool,
-    /// Folder in which we store cached lyrics
+    /// Folder in which we store cached lyrics, relative to the data folder unless absolute
     pub cache_folder: String,
     /// Dim lines that are far from the current line
     pub dim_distant_lines: bool,
@@ -137,7 +137,7 @@ impl Default for Settings {
 impl Settings {
     pub fn new() -> Result<Self, ConfigError> {
         Config::builder()
-            .add_source(File::with_name("config"))
+            .add_source(File::from(paths::config_file()))
             .add_source(Environment::with_prefix("APP"))
             .build()?
             .try_deserialize()
@@ -168,13 +168,13 @@ impl Settings {
         }
     }
 
-    /// Serialize the current state back to `config.toml`.
+    /// Serialize the current state back to `config.toml` in the data folder.
     pub fn save(&self) -> Result<(), String> {
         debug!("Starting save!");
         let toml = toml::ser::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialise settings: {e}"))?;
         let res =
-            fs::write("config.toml", toml).map_err(|e| format!("Failed to write config.toml: {e}"));
+            fs::write(paths::config_file(), toml).map_err(|e| format!("Failed to write config.toml: {e}"));
         if res.is_err() {
             error!("{}", res.clone().err().unwrap());
         }

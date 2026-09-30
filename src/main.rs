@@ -29,6 +29,7 @@ mod lyrics_fetch;
 mod lyrics_parser;
 mod now_playing;
 mod overlay;
+mod paths;
 mod runtime;
 mod settings;
 mod smtc;
@@ -63,11 +64,13 @@ pub enum MessageToRT {
 }
 
 fn main() {
+    let path_messages = paths::init();
+
     // Generate config file if no config is found
-    let config_created = !exists("config.toml").unwrap();
+    let config_created = !exists(paths::config_file()).unwrap();
     if config_created {
         let str = toml::ser::to_string_pretty(&Settings::default()).unwrap();
-        let mut output = File::create("config.toml").unwrap();
+        let mut output = File::create(paths::config_file()).unwrap();
         write!(output, "{str}").unwrap();
     }
 
@@ -84,7 +87,7 @@ fn main() {
     let rw_settings = Arc::new(TokioRwLock::new(settings));
     let settings_read = rw_settings.blocking_read();
     // Logging
-    let file_appender = rolling::daily("logs", "app.log");
+    let file_appender = rolling::daily(paths::logs_dir(), "app.log");
     let (non_blocking, _writer_guard) = non_blocking(file_appender);
     let filter = EnvFilter::try_new(&settings_read.log_level).unwrap();
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
@@ -94,6 +97,10 @@ fn main() {
         .finish();
     let _subscriber_guard = tracing::subscriber::set_global_default(subscriber);
     info!("Logging initialized with {}", &settings_read.log_level);
+    info!("Data folder: {:?}", paths::data_dir());
+    for message in path_messages {
+        info!("{message}");
+    }
     if config_created {
         info!("Created config.toml; add client_id and client_secret to connect Spotify");
     }

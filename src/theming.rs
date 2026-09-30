@@ -1,12 +1,11 @@
 //! Color themes: a handful of built-in presets plus user-defined ones dropped into the
-//! `themes/` folder as `.toml` files.
+//! `themes/` folder (in the data folder, see `crate::paths`) as `.toml` files.
 use std::fs;
-use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-pub const THEMES_DIR: &str = "themes";
+use crate::paths;
 
 const EXAMPLE_THEME: &str = r#"# Copy this file, rename it to something.toml, and edit the colors to make your own
 # theme. It'll show up as a preset button in Settings the next time you open the app.
@@ -102,10 +101,11 @@ pub fn builtin_themes() -> Vec<Theme> {
 /// Creates the `themes/` folder (if missing) and seeds it with a documented example file,
 /// so users have something to copy without needing to read source code.
 pub fn ensure_themes_dir() {
-    if fs::create_dir_all(THEMES_DIR).is_err() {
+    let themes_dir = paths::themes_dir();
+    if fs::create_dir_all(&themes_dir).is_err() {
         return;
     }
-    let example_path = Path::new(THEMES_DIR).join("example.toml.sample");
+    let example_path = themes_dir.join("example.toml.sample");
     if !example_path.exists() {
         let _ = fs::write(example_path, EXAMPLE_THEME);
     }
@@ -115,7 +115,7 @@ pub fn ensure_themes_dir() {
 /// end in `.toml`) and parses each as a `Theme`. Invalid files are logged and skipped
 /// rather than failing the whole load.
 pub fn load_custom_themes() -> Vec<Theme> {
-    let Ok(entries) = fs::read_dir(THEMES_DIR) else {
+    let Ok(entries) = fs::read_dir(paths::themes_dir()) else {
         return Vec::new();
     };
 
