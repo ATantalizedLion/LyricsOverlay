@@ -121,7 +121,10 @@ def test_pending_entries(tmp_path):
     entry("done", [{"time_ms": 0, "text": "a", "segments": [{"start_ms": 0, "end_ms": 1, "text": "a"}]}])
     entry("no-recording", [{"time_ms": 0, "text": "a"}], recording=False)
     entry("unsynced", [])
+    entry("tried", [{"time_ms": 0, "text": "a"}])
+    (tmp_path / "tried" / ".align-attempted").touch()
     assert [e.name for e in pending_entries(tmp_path)] == ["todo"]
+    assert [e.name for e in pending_entries(tmp_path, redo=True)] == ["done", "todo", "tried", "unsynced"]
 
 
 def test_latin_words_in_cjk_song_still_split():

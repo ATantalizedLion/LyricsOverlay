@@ -5,8 +5,8 @@
 //! sounds and other apps don't end up in the recording. A recording is only kept if it
 //! covers the whole song in one uninterrupted play: it has to start within the first few
 //! seconds, and pausing or seeking abandons it, since either would put the audio out of
-//! step with the lyrics' timestamps. Recordings are deleted by the alignment tool once
-//! it has processed them.
+//! step with the lyrics' timestamps. Recordings stay in the cache entry after alignment,
+//! so they can be re-aligned with different settings later.
 
 // Millisecond and frame counts here are far from the limits of the types they're cast between.
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

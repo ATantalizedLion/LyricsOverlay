@@ -403,18 +403,27 @@ def entry_needs_alignment(entry: Path) -> bool:
     return bool(lines) and not any(l.get("segments") for l in lines)
 
 
-def pending_entries(root: Path) -> list[Path]:
-    """Cache entries with a recording from the overlay that haven't been aligned yet."""
-    return sorted(rec.parent for rec in root.glob(f"*/{RECORDING_FILE}")
-                  if entry_needs_alignment(rec.parent))
+def pending_entries(root: Path, redo: bool = False) -> list[Path]:
+    """Cache entries with a recording from the overlay that haven't been aligned (or
+    tried) yet; with `redo`, every entry that has a recording."""
+    entries = (rec.parent for rec in root.glob(f"*/{RECORDING_FILE}"))
+    if redo:
+        return sorted(entries)
+    return sorted(e for e in entries
+                  if entry_needs_alignment(e) and not (e / ATTEMPTED_MARKER).exists())
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("audio", type=Path, nargs="?", help="The song's audio file (flac, mp3, wav, ogg; m4a needs ffmpeg)")
+    p.add_argument("audio", type=Path, nargs="?",
+                   help="The song's audio file (flac, mp3, wav, ogg; m4a needs ffmpeg). "
+                        "Can be left out with --entry if the overlay recorded the song.")
     p.add_argument("--pending", action="store_true",
-                   help="Process every song the overlay has recorded from Spotify, deleting each recording afterwards")
-    p.add_argument("--keep-audio", action="store_true", help="With --pending, keep the recordings after processing")
+                   help="Process the songs the overlay recorded from Spotify that haven't been aligned yet")
+    p.add_argument("--redo", action="store_true",
+                   help="With --pending, re-align every recorded song, including ones already aligned")
+    p.add_argument("--delete-audio", action="store_true",
+                   help="With --pending, delete each recording once it has been processed")
     p.add_argument("--entry", type=Path, help="Cache entry folder to update, instead of finding it from the file's tags")
     p.add_argument("--lang", help="Lyrics language (ISO code, e.g. en, nl, ja) for syllable splitting; detected if omitted")
     p.add_argument("--words", action="store_true", help="Time whole words instead of syllables")
@@ -431,10 +440,11 @@ def main() -> None:
         if args.audio or args.entry or args.lrc_out:
             p.error("--pending processes the recordings in the cache; don't pass a file, --entry or --lrc-out")
         root = cache_root()
-        entries = pending_entries(root)
+        entries = pending_entries(root, redo=args.redo)
         if not entries:
-            print(f"No recordings waiting in {root}. Turn on 'Record Spotify for syllable timing' "
-                  "in the overlay's settings and play some songs from the start.")
+            hint = "" if args.redo else " (use --redo to re-align songs that were already processed)"
+            print(f"No recordings waiting in {root}{hint}. Turn on 'Record Spotify for syllable "
+                  "timing' in the overlay's settings and play some songs from the start.")
             return
         print(f"{len(entries)} recording(s) to process.")
         models = Models(args)
@@ -448,18 +458,27 @@ def main() -> None:
                 continue
             if args.dry_run:
                 continue
-            if not aligned:
-                (entry / ATTEMPTED_MARKER).touch()
-            if not args.keep_audio:
+            marker = entry / ATTEMPTED_MARKER
+            if aligned:
+                marker.unlink(missing_ok=True)
+            else:
+                marker.touch()
+            if args.delete_audio:
                 recording.unlink(missing_ok=True)
         return
 
-    if args.audio is None:
-        p.error("give an audio file, or --pending to process the overlay's recordings")
-    if not args.audio.exists():
-        raise SystemExit(f"{args.audio} doesn't exist")
-    entry = args.entry or find_cache_entry(cache_root(), read_tags(args.audio))
-    process_entry(entry, args.audio, Models(args))
+    if args.redo or args.delete_audio:
+        p.error("--redo and --delete-audio only apply to --pending")
+    audio = args.audio
+    if audio is None:
+        if args.entry is None or not (args.entry / RECORDING_FILE).exists():
+            p.error("give an audio file, --entry for a song the overlay recorded, "
+                    "or --pending to process all recordings")
+        audio = args.entry / RECORDING_FILE
+    if not audio.exists():
+        raise SystemExit(f"{audio} doesn't exist")
+    entry = args.entry or find_cache_entry(cache_root(), read_tags(audio))
+    process_entry(entry, audio, Models(args))
 
 
 if __name__ == "__main__":

@@ -48,15 +48,25 @@ Then process everything that was recorded:
 uv run align.py --pending
 ```
 
-Each recording is deleted once it's processed (`--keep-audio` keeps them). Recordings
-take about 10 MB per minute of audio until then. They're for this analysis only; the
-tool and the overlay never play them back.
+Recordings are kept after processing, so you can re-align them later, for example after
+tweaking `--min-confidence` or trying `--demucs-model htdemucs_ft`:
+
+```
+uv run align.py --pending --redo                    # re-align every recorded song
+uv run align.py --entry "<cache entry folder>"      # re-align one recorded song
+```
+
+They take about 10 MB per minute of audio. Add `--delete-audio` to `--pending` to remove
+each recording once it's processed, or delete `recording.wav` from a song's cache folder
+by hand. They're for this analysis only; the tool and the overlay never play them back.
 
 Useful options (`uv run align.py --help` for all):
 
 | Option | |
 |---|---|
-| `--pending` | Process all songs the overlay recorded from Spotify |
+| `--pending` | Process the songs the overlay recorded from Spotify that aren't aligned yet |
+| `--redo` | With `--pending`, re-align every recorded song |
+| `--delete-audio` | With `--pending`, delete recordings after processing |
 | `--entry <folder>` | Cache entry to update, if the file's tags don't match what the overlay saw |
 | `--lang en` | Lyrics language for syllable splitting (detected automatically otherwise) |
 | `--words` | Time whole words instead of syllables |
