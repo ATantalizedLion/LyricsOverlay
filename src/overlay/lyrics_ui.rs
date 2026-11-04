@@ -1,8 +1,11 @@
-use egui::{Align, Color32, Label, Layout, Rect, RichText, ScrollArea, Sense, Ui, Vec2};
+use egui::{
+    Align, Color32, FontId, Label, Layout, Rect, RichText, ScrollArea, Sense, TextFormat, Ui, Vec2,
+    text::LayoutJob,
+};
 
 use crate::{
     lyrics_fetch::SongWithLyrics,
-    lyrics_parser::{LyricLine, LyricPosition},
+    lyrics_parser::{LyricLine, LyricPosition, LyricSegment},
     overlay::LyricsAppUI,
     settings::{EasingModes, ProgressBarPosition, TranslationDisplay},
     translation::language_name,
@@ -73,6 +76,7 @@ impl LyricsAppUI {
             center_bias,
             target_line,
             current_index,
+            current_ms,
             raw_progress,
             song_progress,
         );
@@ -188,6 +192,7 @@ impl LyricsAppUI {
         center_bias: f32,
         target_line: f32,
         current_index: usize,
+        current_ms: u128,
         raw_progress: f32,
         song_progress: f32,
     ) -> Vec<f32> {
@@ -226,12 +231,38 @@ impl LyricsAppUI {
                         let translated = translation_for(translation, i);
                         let replace = self.settings_cache.translation_display
                             == TranslationDisplay::ReplaceOriginal;
-                        let label_resp = ui.label(
-                            RichText::new(translated.filter(|_| replace).unwrap_or(&line.text))
+                        let karaoke = (i == current_index
+                            && self.settings_cache.karaoke_highlight
+                            && !(replace && translated.is_some()))
+                        .then(|| line.sung_chars(current_ms.try_into().unwrap_or(usize::MAX)))
+                        .flatten();
+                        let label_resp = if let Some(sung) = karaoke {
+                            let unsung = {
+                                let f = self.settings_cache.future_line_color;
+                                Color32::from_rgba_unmultiplied(
+                                    f[0],
+                                    f[1],
+                                    f[2],
+                                    (f32::from(alpha) * KARAOKE_UNSUNG_ALPHA) as u8,
+                                )
+                            };
+                            ui.label(karaoke_job(
+                                &line.segments,
+                                sung,
+                                self.settings_cache.font_size,
+                                color,
+                                unsung,
+                            ))
+                        } else {
+                            ui.label(
+                                RichText::new(
+                                    translated.filter(|_| replace).unwrap_or(&line.text),
+                                )
                                 .size(self.settings_cache.font_size)
                                 .color(color)
                                 .strong(),
-                        );
+                            )
+                        };
                         if let Some(translated) = translated.filter(|_| !replace) {
                             let dimmed = Color32::from_rgba_unmultiplied(
                                 r,
@@ -423,6 +454,35 @@ fn line_bounds(
         ),
         LyricPosition::AfterEnd(n) => (synced_lyrics[n - 1].time_ms as i64, song_end_ms, n),
     }
+}
+
+/// How visible the not-yet-sung part of the current line is, relative to the sung part.
+const KARAOKE_UNSUNG_ALPHA: f32 = 0.45;
+
+/// The current line with the first `sung_chars` characters in `sung` and the rest in
+/// `unsung`, fading across the character being sung so the fill sweeps smoothly.
+#[allow(clippy::cast_precision_loss)]
+fn karaoke_job(
+    segments: &[LyricSegment],
+    sung_chars: f32,
+    font_size: f32,
+    sung: Color32,
+    unsung: Color32,
+) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    let format = |color| TextFormat {
+        font_id: FontId::proportional(font_size),
+        color,
+        ..Default::default()
+    };
+    let mut buf = [0u8; 4];
+    let mut char_index = 0.0;
+    for ch in segments.iter().flat_map(|s| s.text.chars()) {
+        let t = (sung_chars - char_index).clamp(0.0, 1.0);
+        job.append(ch.encode_utf8(&mut buf), 0.0, format(unsung.lerp_to_gamma(sung, t)));
+        char_index += 1.0;
+    }
+    job
 }
 
 /// Helper for nearly lerping between two colors

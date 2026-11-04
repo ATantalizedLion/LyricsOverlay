@@ -42,6 +42,9 @@ pub struct Settings {
     pub cache_folder: String,
     /// Dim lines that are far from the current line
     pub dim_distant_lines: bool,
+    /// Highlight the current line word by word / syllable by syllable, when the lyrics
+    /// have that timing
+    pub karaoke_highlight: bool,
     /// How often (ms) to poll Windows SMTC for the current track
     pub smtc_poll_interval_ms: u64,
     /// Scroll smoothly or jump per line
@@ -109,6 +112,7 @@ impl Default for Settings {
             caching_enabled: true,
             cache_folder: "cache".into(),
             dim_distant_lines: true,
+            karaoke_highlight: true,
             smtc_poll_interval_ms: 1000,
             scroll_smoothly: false,
             line_transition_ms: 400,

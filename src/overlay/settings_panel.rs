@@ -228,6 +228,16 @@ fn display_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
     settings_row(
         ui,
         background,
+        "Highlight sung words",
+        "Fill in the current line word by word or syllable by syllable as it's sung. \
+         Only works for songs whose lyrics have word or syllable timing.",
+        |ui| {
+            ui.checkbox(&mut settings.karaoke_highlight, "");
+        },
+    );
+    settings_row(
+        ui,
+        background,
         "Auto-hide window buttons",
         "Only show the minimize/settings/close buttons while hovering the window",
         |ui| {
