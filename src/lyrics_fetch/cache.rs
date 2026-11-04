@@ -45,7 +45,7 @@ pub enum LyricsCacheCreateErr {
 impl LyricsFetcher {
     async fn track_cache_dir(&self, req: &LyricsRequestInfo) -> PathBuf {
         let binding = self.settings.read().await.cache_folder.clone();
-        paths::resolve(&binding).join(req.get_track_identifier())
+        req.cache_dir(&paths::resolve(&binding))
     }
 
     pub(super) async fn check_cache(

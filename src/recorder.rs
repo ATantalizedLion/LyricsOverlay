@@ -40,7 +40,9 @@ use crate::{
 
 /// Name of a finished recording inside a cache entry; the alignment tool looks for it.
 pub const RECORDING_FILE: &str = "recording.wav";
-const PARTIAL_FILE: &str = "recording.wav.part";
+/// Where the song in progress is recorded, in the cache root: the song's own folder is
+/// only looked up once it's done, since its lyrics may still be being fetched now.
+const PARTIAL_FILE: &str = ".recording.wav.part";
 /// Left by the alignment tool when it processed a recording but couldn't align any line,
 /// so the same song isn't recorded again and again.
 const ATTEMPTED_MARKER: &str = ".align-attempted";
@@ -62,7 +64,8 @@ type Track = (String, String, String);
 
 struct ActiveRecording {
     track: Track,
-    dir: PathBuf,
+    request: LyricsRequestInfo,
+    cache_root: PathBuf,
     started_at: Instant,
     start_song_ms: u64,
     duration_ms: u64,
@@ -118,20 +121,28 @@ impl SongRecorder {
         if !np.is_playing || position_ms > MAX_START_OFFSET_MS || duration_ms < MIN_DURATION_MS {
             return;
         }
-        let dir = paths::resolve(&cache_folder)
-            .join(LyricsRequestInfo::from_now_playing(np).get_track_identifier());
-        if !needs_recording(&dir) {
+        let cache_root = paths::resolve(&cache_folder);
+        let mut request = LyricsRequestInfo::from_now_playing(np);
+        request.match_existing_cache_entry(&cache_root);
+        if !needs_recording(&request.cache_dir(&cache_root)) {
             return;
         }
-        self.start(np, dir, position_ms, duration_ms);
+        self.start(np, request, cache_root, position_ms, duration_ms);
     }
 
-    fn start(&mut self, np: &NowPlaying, dir: PathBuf, position_ms: u64, duration_ms: u64) {
+    fn start(
+        &mut self,
+        np: &NowPlaying,
+        request: LyricsRequestInfo,
+        cache_root: PathBuf,
+        position_ms: u64,
+        duration_ms: u64,
+    ) {
         let Some(pid) = spotify_pid() else {
             debug!("Spotify process not found, not recording");
             return;
         };
-        if let Err(e) = fs::create_dir_all(&dir) {
+        if let Err(e) = fs::create_dir_all(&cache_root) {
             warn!("Can't create cache folder for recording: {e}");
             return;
         }
@@ -140,7 +151,7 @@ impl SongRecorder {
             np.artist, np.track_title
         );
         let stop = Arc::new(AtomicBool::new(false));
-        let path = dir.join(PARTIAL_FILE);
+        let path = cache_root.join(PARTIAL_FILE);
         let thread_stop = stop.clone();
         let handle = std::thread::Builder::new()
             .name("song-recorder".into())
@@ -148,7 +159,8 @@ impl SongRecorder {
             .expect("failed to spawn recorder thread");
         self.active = Some(ActiveRecording {
             track: track_key(np),
-            dir,
+            request,
+            cache_root,
             started_at: Instant::now(),
             start_song_ms: position_ms,
             duration_ms,
@@ -166,7 +178,7 @@ impl SongRecorder {
         // Joining waits at most one capture wait (~100ms) plus the WAV finalize, so do
         // it off the async runtime.
         tokio::task::spawn_blocking(move || {
-            let partial = active.dir.join(PARTIAL_FILE);
+            let partial = active.cache_root.join(PARTIAL_FILE);
             let frames = match active.handle.join() {
                 Ok(Ok(frames)) => frames,
                 Ok(Err(e)) => {
@@ -182,15 +194,19 @@ impl SongRecorder {
             };
             let recorded_ms = frames * 1000 / u64::from(SAMPLE_RATE);
             let complete = recorded_ms + END_TOLERANCE_MS >= active.duration_ms;
-            if complete && has_synced_lyrics(&active.dir) {
-                match fs::rename(&partial, active.dir.join(RECORDING_FILE)) {
-                    Ok(()) => info!("Saved recording to {}", active.dir.display()),
+            let mut request = active.request;
+            request.match_existing_cache_entry(&active.cache_root);
+            let dir = request.cache_dir(&active.cache_root);
+            if complete && has_synced_lyrics(&dir) {
+                match fs::rename(&partial, dir.join(RECORDING_FILE)) {
+                    Ok(()) => info!("Saved recording to {}", dir.display()),
                     Err(e) => warn!("Couldn't save recording: {e}"),
                 }
             } else {
-                debug!(
-                    "Discarding recording ({recorded_ms} of {} ms, complete: {complete})",
-                    active.duration_ms
+                info!(
+                    "Discarding recording ({recorded_ms} of {} ms, lyrics found: {})",
+                    active.duration_ms,
+                    has_synced_lyrics(&dir)
                 );
                 let _ = fs::remove_file(&partial);
             }
@@ -199,7 +215,7 @@ impl SongRecorder {
 
     fn abandon(&mut self, reason: &str) {
         if let Some(active) = self.active.as_mut() {
-            debug!("Abandoning recording: {reason}");
+            info!("Abandoning recording: {reason}");
             // Make `finish` see it as incomplete by pretending the song is endless.
             active.duration_ms = u64::MAX / 2;
         }
