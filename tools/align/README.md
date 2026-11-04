@@ -4,7 +4,8 @@ Adds syllable (karaoke-style) timing to lyrics the overlay has already cached, b
 them to the song's audio. The overlay then fills in the current line syllable by syllable
 (Settings → Highlight sung words).
 
-This is an optional extra for songs you have as audio files. It needs Python and a few GB
+This is an optional extra. It works on songs you have as audio files, or on songs the
+overlay recorded while you played them in Spotify (see below). It needs Python and a few GB
 of machine-learning libraries and models, so it is kept separate from the exe.
 
 ## How it works
@@ -32,10 +33,30 @@ Play the song once in the overlay first (with caching on) so its lyrics are in t
 The first run downloads the Python packages and models (a few GB). Expect roughly a minute
 per song on CPU, a few seconds with an NVIDIA GPU.
 
+### Songs recorded from Spotify
+
+Turn on **Settings → Record Spotify for syllable timing** in the overlay (needs lyrics
+caching on). While it's on, every song you play in the Spotify desktop app is recorded
+into its cache entry, as long as you play it from the start to the end without pausing or
+seeking (anything else is thrown away, because the audio would no longer line up with
+the lyrics). Only Spotify's own audio is captured, not other apps or notification sounds.
+Songs without line-synced lyrics, or that already have syllable timing, aren't recorded.
+
+Then process everything that was recorded:
+
+```
+uv run align.py --pending
+```
+
+Each recording is deleted once it's processed (`--keep-audio` keeps them). Recordings
+take about 10 MB per minute of audio until then. They're for this analysis only; the
+tool and the overlay never play them back.
+
 Useful options (`uv run align.py --help` for all):
 
 | Option | |
 |---|---|
+| `--pending` | Process all songs the overlay recorded from Spotify |
 | `--entry <folder>` | Cache entry to update, if the file's tags don't match what the overlay saw |
 | `--lang en` | Lyrics language for syllable splitting (detected automatically otherwise) |
 | `--words` | Time whole words instead of syllables |

@@ -348,6 +348,20 @@ fn behaviour_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings)
             ui.checkbox(&mut settings.caching_enabled, "");
         },
     );
+    if settings.caching_enabled {
+        settings_row(
+            ui,
+            background,
+            "Record Spotify for syllable timing",
+            "Record songs playing in the Spotify app (only Spotify's audio) into the lyrics cache, \
+             so the alignment tool in tools/align can add syllable timing to them. Only complete, \
+             uninterrupted plays from the start are kept, and the tool deletes each recording \
+             once it has processed it. About 10 MB per minute of audio until then.",
+            |ui| {
+                ui.checkbox(&mut settings.record_spotify_for_alignment, "");
+            },
+        );
+    }
 
     settings_row(
         ui,

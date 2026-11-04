@@ -24,7 +24,8 @@ You can choose which languages get translated, e.g. translate Japanese but leave
 
 ### Syllable timing (optional)
 If a song's lyrics come with word or syllable timing (Enhanced LRC), the current line fills in as it's sung. 
-For songs you have as audio files, the alignment tool in [`tools/align`](tools/align/README.md) can add syllable timing to lyrics the overlay has already cached, using vocal separation and a forced-alignment model. It's a separate Python tool, since the models are several GB.
+For songs you have as audio files, the alignment tool in [`tools/align`](tools/align/README.md) can add syllable timing to lyrics the overlay has already cached, using vocal separation and a forced-alignment model. It's a separate Python tool, since the models are several GB. 
+With Settings → Record Spotify for syllable timing on, songs you play from start to end in the Spotify app are recorded for the tool to process with `--pending`.
 
 ## Where files are stored
 Config, cached lyrics, logs and custom themes live in `%APPDATA%\LyricsOverlay` (Settings → Advanced → Data folder → Open). 

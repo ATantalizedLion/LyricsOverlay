@@ -45,6 +45,9 @@ pub struct Settings {
     /// Highlight the current line word by word / syllable by syllable, when the lyrics
     /// have that timing
     pub karaoke_highlight: bool,
+    /// Record songs played in the local Spotify app into their cache entry, for the
+    /// syllable alignment tool (`tools/align`) to process
+    pub record_spotify_for_alignment: bool,
     /// How often (ms) to poll Windows SMTC for the current track
     pub smtc_poll_interval_ms: u64,
     /// Scroll smoothly or jump per line
@@ -113,6 +116,7 @@ impl Default for Settings {
             cache_folder: "cache".into(),
             dim_distant_lines: true,
             karaoke_highlight: true,
+            record_spotify_for_alignment: false,
             smtc_poll_interval_ms: 1000,
             scroll_smoothly: false,
             line_transition_ms: 400,

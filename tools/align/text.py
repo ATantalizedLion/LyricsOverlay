@@ -100,12 +100,16 @@ def split_syllables(word: str, lang: str | None) -> list[str]:
     m = re.match(r"^(\W*)(.*?)(\W*)$", word, re.S)
     assert m
     lead, core, trail = m.groups()
-    hyph = _hyphenator(lang)
-    if not core or hyph is None or "-" in core:
+    if not lang or not core or "-" in core:
         return [word]
-    # Hyphenation patterns deliberately avoid short splits ("gon-na", "a-round"), which
-    # karaoke does want, so fall back to splitting on vowel groups.
-    positions = hyph.positions(core) or vowel_group_positions(core, lang)
+    hyph = _hyphenator(lang)
+    if hyph is None:
+        # No patterns for this language (e.g. English words in a Japanese song).
+        positions = vowel_group_positions(core, "en") if core.isascii() else []
+    else:
+        # Hyphenation patterns deliberately avoid short splits ("gon-na", "a-round"),
+        # which karaoke does want, so fall back to splitting on vowel groups.
+        positions = hyph.positions(core) or vowel_group_positions(core, lang)
     if not positions:
         return [word]
     pieces, prev = [], 0

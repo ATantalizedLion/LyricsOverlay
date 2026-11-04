@@ -30,6 +30,7 @@ mod lyrics_parser;
 mod now_playing;
 mod overlay;
 mod paths;
+mod recorder;
 mod runtime;
 mod settings;
 mod smtc;

@@ -105,3 +105,25 @@ def test_find_cache_entry(tmp_path):
 def test_vowel_group_fallback_for_short_words():
     syls = syllabify_line("gonna around make", "en", identity)
     assert [s.text for s in syls] == ["gon", "na ", "a", "round ", "make"]
+
+
+def test_pending_entries(tmp_path):
+    import json
+    from align import pending_entries
+
+    def entry(name, lines, recording=True):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "lyrics.lrc").write_text(json.dumps({"synced_lyrics": lines, "plain_lyrics": []}))
+        if recording:
+            (tmp_path / name / "recording.wav").write_bytes(b"")
+
+    entry("todo", [{"time_ms": 0, "text": "a"}])
+    entry("done", [{"time_ms": 0, "text": "a", "segments": [{"start_ms": 0, "end_ms": 1, "text": "a"}]}])
+    entry("no-recording", [{"time_ms": 0, "text": "a"}], recording=False)
+    entry("unsynced", [])
+    assert [e.name for e in pending_entries(tmp_path)] == ["todo"]
+
+
+def test_latin_words_in_cjk_song_still_split():
+    syls = syllabify_line("君の baby", "ja", identity)
+    assert [s.text for s in syls] == ["君", "の ", "ba", "by"]

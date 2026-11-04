@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 use crate::{
-    MessageToUI, now_playing::NowPlaying, runtime::Messages, settings::NowPlayingSource,
-    settings::Settings, spotify::SpotifyClient,
+    MessageToUI, now_playing::NowPlaying, recorder::SongRecorder, runtime::Messages,
+    settings::NowPlayingSource, settings::Settings, spotify::SpotifyClient,
 };
 
 use super::SmtcClient;
@@ -25,6 +25,10 @@ pub struct SmtcPoller {
     settings: Arc<TokioRwLock<Settings>>,
     last_track_key: Option<(String, String, String)>,
     resolved_spotify_id: Option<String>,
+    recorder: SongRecorder,
+    /// Whether the last reading came from the Spotify app on this machine (via SMTC), as
+    /// opposed to another app or Spotify's API (which may be a different device).
+    last_from_local_spotify: bool,
 }
 
 impl SmtcPoller {
@@ -34,11 +38,13 @@ impl SmtcPoller {
         settings: Arc<TokioRwLock<Settings>>,
     ) -> Self {
         Self {
+            recorder: SongRecorder::new(settings.clone()),
             smtc,
             spotify,
             settings,
             last_track_key: None,
             resolved_spotify_id: None,
+            last_from_local_spotify: false,
         }
     }
 
@@ -48,7 +54,15 @@ impl SmtcPoller {
         ));
         loop {
             interval.tick().await;
+            self.last_from_local_spotify = false;
             let msg = self.poll().await;
+            let now_playing = match &msg {
+                MessageToUI::CurrentlyPlaying(np) => Some(np),
+                _ => None,
+            };
+            self.recorder
+                .observe(now_playing, self.last_from_local_spotify)
+                .await;
             Messages::to_ui(msg).send(tx_ui.clone()).await;
         }
     }
@@ -88,15 +102,14 @@ impl SmtcPoller {
             self.resolved_spotify_id = None;
         }
 
-        if self.resolved_spotify_id.is_none() {
-            let looks_like_spotify = self
-                .smtc
-                .current_source_app_id()
-                .is_some_and(|id| id.to_lowercase().contains("spotify"));
+        let looks_like_spotify = self
+            .smtc
+            .current_source_app_id()
+            .is_some_and(|id| id.to_lowercase().contains("spotify"));
+        self.last_from_local_spotify = looks_like_spotify;
 
-            if looks_like_spotify {
-                self.resolved_spotify_id = self.try_resolve_spotify_id(&now_playing).await;
-            }
+        if self.resolved_spotify_id.is_none() && looks_like_spotify {
+            self.resolved_spotify_id = self.try_resolve_spotify_id(&now_playing).await;
         }
 
         now_playing.spotify_id.clone_from(&self.resolved_spotify_id);
