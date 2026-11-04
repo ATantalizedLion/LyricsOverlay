@@ -322,15 +322,39 @@ class Models:
         return self._aligner
 
     def vocals(self, audio: Path):
+        offset_ms = recording_offset_ms(audio)
         if self.args.no_separation:
-            return load_audio(audio, ALIGN_SR).mean(0, keepdim=True)
+            return shift_to_song_time(load_audio(audio, ALIGN_SR), ALIGN_SR, offset_ms).mean(0, keepdim=True)
         if self._demucs is None:
             from demucs.pretrained import get_model
 
             self._demucs = get_model(self.args.demucs_model)
             self._demucs.eval()
         sep_sr = self._demucs.samplerate
-        return separate_vocals(load_audio(audio, sep_sr), sep_sr, self.device, self._demucs)
+        wav = shift_to_song_time(load_audio(audio, sep_sr), sep_sr, offset_ms)
+        return separate_vocals(wav, sep_sr, self.device, self._demucs)
+
+
+def recording_offset_ms(audio: Path) -> int:
+    """For a recording made by the overlay, the song position at its first sample (from
+    recording.json next to it); 0 for any other file."""
+    meta = audio.parent / "recording.json"
+    if audio.name != RECORDING_FILE or not meta.exists():
+        return 0
+    try:
+        return int(json.loads(meta.read_text(encoding="utf-8")).get("offset_ms", 0))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0
+
+
+def shift_to_song_time(wav, sr: int, offset_ms: int):
+    """Pads (offset > 0) or trims (offset < 0) the start so sample 0 is song time 0."""
+    import torch
+
+    n = abs(offset_ms) * sr // 1000
+    if offset_ms > 0:
+        return torch.cat([torch.zeros(wav.shape[0], n, dtype=wav.dtype), wav], dim=1)
+    return wav[:, n:]
 
 
 def process_entry(entry: Path, audio: Path, models: Models) -> int:

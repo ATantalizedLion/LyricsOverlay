@@ -130,3 +130,20 @@ def test_pending_entries(tmp_path):
 def test_latin_words_in_cjk_song_still_split():
     syls = syllabify_line("君の baby", "ja", identity)
     assert [s.text for s in syls] == ["君", "の ", "ba", "by"]
+
+
+def test_recording_offset(tmp_path):
+    import torch
+    from align import recording_offset_ms, shift_to_song_time
+
+    rec = tmp_path / "recording.wav"
+    rec.write_bytes(b"")
+    assert recording_offset_ms(rec) == 0
+    (tmp_path / "recording.json").write_text('{"offset_ms": -1500}')
+    assert recording_offset_ms(rec) == -1500
+    assert recording_offset_ms(tmp_path / "song.flac") == 0
+
+    wav = torch.ones(2, 1000)
+    assert shift_to_song_time(wav, 1000, -250).shape == (2, 750)
+    padded = shift_to_song_time(wav, 1000, 100)
+    assert padded.shape == (2, 1100) and padded[:, :100].abs().sum() == 0
