@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use egui::{
     Align, Color32, FontId, Label, Layout, Rect, RichText, ScrollArea, Sense, TextFormat, Ui, Vec2,
     text::LayoutJob,
@@ -65,7 +67,12 @@ impl LyricsAppUI {
         let (raw_progress, target_line) =
             self.compute_target_line(position, current_ms, t0, t1, current_index);
 
-        let available_height = ui.available_height();
+        let smoothing = layout_smoothing_factor(&mut self.last_layout_smooth);
+        let available_height = smoothed_height(
+            &mut self.smoothed_lyrics_height,
+            ui.available_height(),
+            smoothing,
+        );
         let (scroll_y, center_bias) = self.compute_scroll_offset(target_line, available_height);
 
         let new_offsets = self.draw_lyric_lines(
@@ -80,7 +87,7 @@ impl LyricsAppUI {
             raw_progress,
             song_progress,
         );
-        self.line_top_offsets = new_offsets;
+        smooth_line_offsets(&mut self.line_top_offsets, new_offsets, smoothing);
 
         if self.settings_cache.line_progress_bar_position == ProgressBarPosition::Bottom {
             draw_progress_bar(ui, raw_progress, ui.available_width());
@@ -379,6 +386,60 @@ impl LyricsAppUI {
                     }
                 });
             });
+    }
+}
+
+/// Time constant of the layout low-pass filter: a layout change is ~63% applied after
+/// this long and ~95% after three times this. Short enough to still feel responsive
+/// to a font size change, long enough to swallow single-frame jumps while resizing.
+const LAYOUT_SMOOTHING_SECS: f32 = 0.08;
+
+/// Blend factor for this frame's layout low-pass filter, from the time since the last
+/// frame, so the filter's time constant is the same at any frame rate.
+fn layout_smoothing_factor(last: &mut Instant) -> f32 {
+    let now = Instant::now();
+    // Clamp so a long pause (window hidden, nothing playing) can't make the first
+    // frame back look like it should still be gliding from ancient values.
+    let dt = now.duration_since(*last).as_secs_f32().min(0.25);
+    *last = now;
+    1.0 - (-dt / LAYOUT_SMOOTHING_SECS).exp()
+}
+
+/// Low-pass filters the lyrics area height, so vertical resizing doesn't jerk the
+/// center line around.
+fn smoothed_height(smoothed: &mut Option<f32>, measured: f32, smoothing: f32) -> f32 {
+    let height = match *smoothed {
+        Some(prev) => low_pass(prev, measured, smoothing),
+        None => measured,
+    };
+    *smoothed = Some(height);
+    height
+}
+
+/// Low-pass filters this frame's measured line offsets into `smoothed`.
+///
+/// Resizing re-wraps lines, which shifts every offset below the change at once;
+/// using those raw values made the scroll position jump for a frame and then settle,
+/// which shows up as blinking while dragging the window edge. A different line count
+/// means a different song or layout entirely, so that snaps instead of gliding.
+fn smooth_line_offsets(smoothed: &mut Vec<f32>, measured: Vec<f32>, smoothing: f32) {
+    if smoothed.len() != measured.len() {
+        *smoothed = measured;
+        return;
+    }
+    for (current, target) in smoothed.iter_mut().zip(measured) {
+        *current = low_pass(*current, target, smoothing);
+    }
+}
+
+/// Moves `current` towards `target` by fraction `t`, snapping once within a hair so
+/// the filter settles instead of creeping by sub-pixel amounts forever.
+fn low_pass(current: f32, target: f32, t: f32) -> f32 {
+    let next = current + (target - current) * t;
+    if (target - next).abs() < 0.05 {
+        target
+    } else {
+        next
     }
 }
 
