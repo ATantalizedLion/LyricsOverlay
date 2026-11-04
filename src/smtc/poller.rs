@@ -26,9 +26,10 @@ pub struct SmtcPoller {
     last_track_key: Option<(String, String, String)>,
     resolved_spotify_id: Option<String>,
     recorder: SongRecorder,
-    /// Whether the last reading came from the Spotify app on this machine (via SMTC), as
-    /// opposed to another app or Spotify's API (which may be a different device).
-    last_from_local_spotify: bool,
+    /// The Spotify app's own reading (via SMTC) when the Spotify app on this machine is
+    /// what's playing, for the recorder. `None` for other apps, and for playback on
+    /// another device seen only through Spotify's API.
+    local_spotify_reading: Option<NowPlaying>,
 }
 
 impl SmtcPoller {
@@ -44,7 +45,7 @@ impl SmtcPoller {
             settings,
             last_track_key: None,
             resolved_spotify_id: None,
-            last_from_local_spotify: false,
+            local_spotify_reading: None,
         }
     }
 
@@ -54,14 +55,17 @@ impl SmtcPoller {
         ));
         loop {
             interval.tick().await;
-            self.last_from_local_spotify = false;
+            self.local_spotify_reading = None;
             let msg = self.poll().await;
-            let now_playing = match &msg {
-                MessageToUI::CurrentlyPlaying(np) => Some(np),
-                _ => None,
-            };
+            if self.local_spotify_reading.is_none()
+                && let MessageToUI::CurrentlyPlaying(np) = &msg
+            {
+                // The reading came from Spotify's API; it may still be this machine's
+                // Spotify app playing it.
+                self.local_spotify_reading = self.local_spotify_playing(np).await;
+            }
             self.recorder
-                .observe(now_playing, self.last_from_local_spotify)
+                .observe(self.local_spotify_reading.as_ref())
                 .await;
             Messages::to_ui(msg).send(tx_ui.clone()).await;
         }
@@ -106,14 +110,34 @@ impl SmtcPoller {
             .smtc
             .current_source_app_id()
             .is_some_and(|id| id.to_lowercase().contains("spotify"));
-        self.last_from_local_spotify = looks_like_spotify;
 
         if self.resolved_spotify_id.is_none() && looks_like_spotify {
             self.resolved_spotify_id = self.try_resolve_spotify_id(&now_playing).await;
         }
 
         now_playing.spotify_id.clone_from(&self.resolved_spotify_id);
+        if looks_like_spotify {
+            self.local_spotify_reading = Some(now_playing.clone());
+        }
         MessageToUI::CurrentlyPlaying(now_playing)
+    }
+
+    /// SMTC's reading of the local Spotify app, if that's playing the same track as
+    /// `api_reading` (as opposed to Spotify Connect playback on another device).
+    async fn local_spotify_playing(&self, api_reading: &NowPlaying) -> Option<NowPlaying> {
+        let is_spotify = self
+            .smtc
+            .current_source_app_id()
+            .is_some_and(|id| id.to_lowercase().contains("spotify"));
+        if !is_spotify {
+            return None;
+        }
+        let local = self.smtc.read_now_playing().await?;
+        (local.is_playing
+            && local
+                .track_title
+                .eq_ignore_ascii_case(&api_reading.track_title))
+        .then_some(local)
     }
 
     /// Called only when SMTC has no local session and the preference is `PreferSmtc`.

@@ -106,9 +106,9 @@ impl SongRecorder {
         }
     }
 
-    /// Called on every now-playing poll. `local_spotify` says whether the reading comes
-    /// from the Spotify app on this machine (the only thing we can capture).
-    pub async fn observe(&mut self, now_playing: Option<&NowPlaying>, local_spotify: bool) {
+    /// Called on every now-playing poll with the Spotify app's reading when the Spotify
+    /// app on this machine is what's playing (the only thing we can capture), else `None`.
+    pub async fn observe(&mut self, local_spotify: Option<&NowPlaying>) {
         let (enabled, cache_folder) = {
             let s = self.settings.read().await;
             (
@@ -116,7 +116,7 @@ impl SongRecorder {
                 s.cache_folder.clone(),
             )
         };
-        let reading = now_playing.filter(|_| enabled && local_spotify);
+        let reading = local_spotify.filter(|_| enabled);
 
         if let Some(active) = self.active.as_mut() {
             match reading {
