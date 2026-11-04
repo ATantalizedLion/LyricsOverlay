@@ -51,8 +51,14 @@ pub struct LyricsAppUI {
     /// Is the settings window currenly open
     settings_open: bool,
 
-    /// measured y of each line, updated every frame
+    /// Low-pass filtered y of each line, updated every frame from the measured layout.
+    /// Filtered so a layout change (resize re-wrapping lines, font size change) glides
+    /// instead of jumping the scroll position for a frame - see `smooth_layout`.
     line_top_offsets: Vec<f32>,
+    /// Low-pass filtered height of the lyrics area, for the same reason.
+    smoothed_lyrics_height: Option<f32>,
+    /// When the layout filter last ran, to make it frame-rate independent.
+    last_layout_smooth: Instant,
 
     /// Translation-related settings the current translation was requested with, to
     /// re-request when they change - see `refresh_translation_on_settings_change`.
@@ -91,6 +97,8 @@ impl LyricsAppUI {
             settings_cache: settings.blocking_read().clone(),
             settings_open: false,
             line_top_offsets: vec![],
+            smoothed_lyrics_height: None,
+            last_layout_smooth: Instant::now(),
             translation_settings_key: String::new(),
             custom_themes: theming::load_custom_themes(),
             last_window_save: Instant::now(),
