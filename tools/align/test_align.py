@@ -147,3 +147,34 @@ def test_recording_offset(tmp_path):
     assert shift_to_song_time(wav, 1000, -250).shape == (2, 750)
     padded = shift_to_song_time(wav, 1000, 100)
     assert padded.shape == (2, 1100) and padded[:, :100].abs().sum() == 0
+
+
+def test_audible_share(tmp_path):
+    import soundfile as sf
+    from align import audible_share
+
+    sr = 8000
+    quiet = np.zeros((sr * 4, 2), dtype=np.int16)
+    quiet[:sr // 2] = 1000  # half a second of sound in 4 s
+    sf.write(tmp_path / "quiet.wav", quiet, sr, subtype="PCM_16")
+    assert audible_share(tmp_path / "quiet.wav") < 0.2
+
+    loud = (np.random.default_rng(0).normal(size=(sr * 4, 2)) * 3000).astype(np.int16)
+    sf.write(tmp_path / "loud.wav", loud, sr, subtype="PCM_16")
+    assert audible_share(tmp_path / "loud.wav") > 0.95
+
+
+def test_recording_problem(tmp_path):
+    import json
+    import soundfile as sf
+    from align import recording_problem
+
+    sr = 8000
+    loud = (np.random.default_rng(0).normal(size=(sr * 60, 2)) * 3000).astype(np.int16)
+    sf.write(tmp_path / "recording.wav", loud, sr, subtype="PCM_16")
+    (tmp_path / ".meta").write_text(json.dumps({"duration_sec": 61.0}))
+    assert recording_problem(tmp_path) is None
+    (tmp_path / ".meta").write_text(json.dumps({"duration_sec": 200.0}))
+    assert "not this song's audio" in recording_problem(tmp_path)
+    sf.write(tmp_path / "recording.wav", np.zeros((sr * 60, 2), dtype=np.int16), sr, subtype="PCM_16")
+    assert "silent" in recording_problem(tmp_path)

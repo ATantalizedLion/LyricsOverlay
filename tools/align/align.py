@@ -418,6 +418,45 @@ def process_entry(entry: Path, audio: Path, models: Models) -> int:
     return aligned
 
 
+AUDIBLE_LEVEL = 32  # int16, about -60 dBFS; matches src/recorder.rs
+MIN_AUDIBLE_SHARE = 0.3
+
+
+def audible_share(path: Path) -> float:
+    """Share of frames with any sound. Recordings the overlay made while Spotify played on
+    another device (Spotify Connect) are near-silent."""
+    import soundfile as sf
+
+    audible = total = 0
+    for block in sf.blocks(str(path), blocksize=1 << 16, dtype="int16", always_2d=True):
+        audible += int((np.abs(block.astype(np.int32)).max(axis=1) > AUDIBLE_LEVEL).sum())
+        total += block.shape[0]
+    return audible / total if total else 0.0
+
+
+MAX_LENGTH_MISMATCH_SEC = 8.0
+
+
+def recording_problem(entry: Path) -> str | None:
+    """Why the overlay's recording in `entry` can't be used, if it can't: near-silent
+    (Spotify was playing on another device), or not the length of the song (older builds
+    could save the next song's audio into the wrong folder)."""
+    import soundfile as sf
+
+    recording = entry / RECORDING_FILE
+    share = audible_share(recording)
+    if share < MIN_AUDIBLE_SHARE:
+        return f"recording is almost silent ({share:.0%} audible), probably played on another device"
+    try:
+        duration = float(json.loads((entry / ".meta").read_text(encoding="utf-8"))["duration_sec"])
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+    covered = sf.info(str(recording)).duration + recording_offset_ms(recording) / 1000
+    if abs(covered - duration) > MAX_LENGTH_MISMATCH_SEC:
+        return f"recording covers {covered:.0f}s but the song is {duration:.0f}s, so it's not this song's audio"
+    return None
+
+
 def entry_needs_alignment(entry: Path) -> bool:
     try:
         song = json.loads((entry / "lyrics.lrc").read_text(encoding="utf-8"))
@@ -475,6 +514,14 @@ def main() -> None:
         for n, entry in enumerate(entries, 1):
             print(f"\n[{n}/{len(entries)}] ", end="")
             recording = entry / RECORDING_FILE
+            problem = recording_problem(entry)
+            if problem:
+                print(f"{entry.name}: {problem}. Deleting the recording so the song can be "
+                      "recorded again.")
+                if not args.dry_run:
+                    recording.unlink(missing_ok=True)
+                    (entry / "recording.json").unlink(missing_ok=True)
+                continue
             try:
                 aligned = process_entry(entry, recording, models)
             except Exception as e:  # noqa: BLE001 - keep going with the other songs

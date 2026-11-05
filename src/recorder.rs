@@ -44,9 +44,17 @@ pub const RECORDING_FILE: &str = "recording.wav";
 /// Next to the recording: `{"offset_ms": n}`, the song position at the file's first
 /// sample (negative if the file starts before the song).
 const RECORDING_META_FILE: &str = "recording.json";
-/// Where the song in progress is recorded, in the cache root: the song's own folder is
-/// only looked up once it's done, since its lyrics may still be being fetched now.
-const PARTIAL_FILE: &str = ".recording.wav.part";
+/// Songs in progress are recorded into `.recording-<n>.wav.part` in the cache root: the
+/// song's own folder is only looked up once it's done, since its lyrics may still be
+/// being fetched now. Each recording gets its own file, because the next song's capture
+/// starts while the previous one is still being saved.
+fn partial_file_name() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(".recording-{nanos}.wav.part")
+}
 /// Left by the alignment tool when it processed a recording but couldn't align any line,
 /// so the same song isn't recorded again and again.
 const ATTEMPTED_MARKER: &str = ".align-attempted";
@@ -69,6 +77,12 @@ const MAX_PAUSED_POLLS: u32 = 2;
 const END_TOLERANCE_MS: i64 = 2_500;
 /// Skip very short tracks (intros, skits, ads).
 const MIN_DURATION_MS: u64 = 30_000;
+/// A sample above this (about -60 dBFS) counts as sound rather than silence.
+const AUDIBLE_LEVEL: i16 = 32;
+/// Share of a recording that must have sound in it. When the Spotify app is controlling
+/// playback on another device (Spotify Connect), Windows still reports it as playing
+/// here, but no audio comes out of this PC: those recordings are near-silent.
+const MIN_AUDIBLE_SHARE: f64 = 0.3;
 /// Safety cap on one recording.
 const MAX_RECORDING_MS: u64 = 20 * 60 * 1000;
 
@@ -78,6 +92,8 @@ struct ActiveRecording {
     track: Track,
     request: LyricsRequestInfo,
     cache_root: PathBuf,
+    /// This recording's own in-progress file, see `partial_file_name`.
+    partial: PathBuf,
     started_at: Instant,
     duration_ms: u64,
     /// Song position minus time since the capture started, per reading while playing.
@@ -87,7 +103,7 @@ struct ActiveRecording {
     paused_polls: u32,
     abandoned: Option<&'static str>,
     stop: Arc<AtomicBool>,
-    handle: JoinHandle<Result<u64, String>>,
+    handle: JoinHandle<Result<Captured, String>>,
 }
 
 pub struct SongRecorder {
@@ -174,7 +190,8 @@ impl SongRecorder {
             np.artist, np.track_title
         );
         let stop = Arc::new(AtomicBool::new(false));
-        let path = cache_root.join(PARTIAL_FILE);
+        let partial = cache_root.join(partial_file_name());
+        let path = partial.clone();
         let thread_stop = stop.clone();
         let handle = std::thread::Builder::new()
             .name("song-recorder".into())
@@ -184,6 +201,7 @@ impl SongRecorder {
             track: track_key(np),
             request,
             cache_root,
+            partial,
             started_at: Instant::now(),
             duration_ms,
             offsets_ms: Vec::new(),
@@ -261,9 +279,9 @@ impl ActiveRecording {
             Some(reason) => Err(reason.to_string()),
             None => self.start_offset_ms(),
         };
-        let partial = self.cache_root.join(PARTIAL_FILE);
-        let frames = match self.handle.join() {
-            Ok(Ok(frames)) => frames,
+        let partial = self.partial.clone();
+        let captured = match self.handle.join() {
+            Ok(Ok(captured)) => captured,
             Ok(Err(e)) => {
                 warn!("Recording failed: {e}");
                 let _ = fs::remove_file(&partial);
@@ -280,7 +298,9 @@ impl ActiveRecording {
         let dir = request.cache_dir(&self.cache_root);
 
         #[allow(clippy::cast_possible_wrap)]
-        let recorded_ms = (frames * 1000 / u64::from(SAMPLE_RATE)) as i64;
+        let recorded_ms = (captured.frames * 1000 / u64::from(SAMPLE_RATE)) as i64;
+        #[allow(clippy::cast_precision_loss)]
+        let audible_share = captured.audible_frames as f64 / captured.frames.max(1) as f64;
         #[allow(clippy::cast_possible_wrap)]
         let duration_ms = self.duration_ms as i64;
         let verdict = offset.and_then(|offset| {
@@ -288,6 +308,12 @@ impl ActiveRecording {
                 return Err(format!(
                     "incomplete ({} of {duration_ms} ms)",
                     offset + recorded_ms
+                ));
+            }
+            if audible_share < MIN_AUDIBLE_SHARE {
+                return Err(format!(
+                    "almost no sound ({:.0}% audible), probably playing on another device",
+                    audible_share * 100.0
                 ));
             }
             if !has_synced_lyrics(&dir) {
@@ -391,7 +417,7 @@ fn spotify_pid() -> Option<u32> {
 /// nothing while the app is silent), so the file stays in step with real time. Returns
 /// the number of frames written.
 #[allow(clippy::cast_possible_truncation)]
-fn capture(pid: u32, path: &Path, max_ms: u64, stop: &AtomicBool) -> Result<u64, String> {
+fn capture(pid: u32, path: &Path, max_ms: u64, stop: &AtomicBool) -> Result<Captured, String> {
     let err = |e: wasapi::WasapiError| e.to_string();
     let _ = wasapi::initialize_mta().ok();
 
@@ -430,6 +456,7 @@ fn capture(pid: u32, path: &Path, max_ms: u64, stop: &AtomicBool) -> Result<u64,
     let max_frames = frames_for(max_ms);
 
     let mut written: u64 = 0;
+    let mut audible_frames: u64 = 0;
     let write_silence = |writer: &mut hound::WavWriter<_>, frames: u64| {
         for _ in 0..frames * u64::from(CHANNELS) {
             writer.write_sample(0i16)?;
@@ -468,17 +495,30 @@ fn capture(pid: u32, path: &Path, max_ms: u64, stop: &AtomicBool) -> Result<u64,
         }
 
         let frames = ((queue.len() / block_align) as u64).min(max_frames.saturating_sub(written));
-        for _ in 0..frames * u64::from(CHANNELS) {
-            let lo = queue.pop_front().unwrap_or(0);
-            let hi = queue.pop_front().unwrap_or(0);
-            writer
-                .write_sample(i16::from_le_bytes([lo, hi]))
-                .map_err(|e| e.to_string())?;
+        for _ in 0..frames {
+            let mut audible = false;
+            for _ in 0..CHANNELS {
+                let lo = queue.pop_front().unwrap_or(0);
+                let hi = queue.pop_front().unwrap_or(0);
+                let sample = i16::from_le_bytes([lo, hi]);
+                audible |= sample.unsigned_abs() > AUDIBLE_LEVEL.unsigned_abs();
+                writer.write_sample(sample).map_err(|e| e.to_string())?;
+            }
+            audible_frames += u64::from(audible);
         }
         written += frames;
     }
 
     let _ = client.stop_stream();
     writer.finalize().map_err(|e| e.to_string())?;
-    Ok(written)
+    Ok(Captured {
+        frames: written,
+        audible_frames,
+    })
+}
+
+struct Captured {
+    frames: u64,
+    /// Frames with any sound in them, see `MIN_AUDIBLE_SHARE`.
+    audible_frames: u64,
 }
