@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sync lab</title>
+<style>
+:root {
+  --bg: #15161a; --panel: #1d1f24; --panel2: #24272d; --line: #33363e; --text: #e6e6e9;
+  --muted: #9a9ca5; --accent: #6aa8ff; --warn: #ffb547; --bad: #ff6b6b; --good: #5fd38d;
+  --wave: #4b5160; --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); }
+button, select, input { font: inherit; color: inherit; }
+button { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #0b1a33; border-color: var(--accent); font-weight: 600; }
+button:disabled { opacity: .45; cursor: default; }
+select, input[type=text], input[type=number] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; min-width: 0; }
+input[type=number] { width: 90px; }
+header { display: flex; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0 8px 0 0; }
+#song { max-width: 420px; flex: 1 1 260px; }
+#songInfo { color: var(--muted); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+.good { color: var(--good); }
+.muted { color: var(--muted); }
+main { display: grid; grid-template-columns: 300px 1fr; gap: 0; min-height: calc(100vh - 46px); }
+aside { border-right: 1px solid var(--line); padding: 10px 12px; background: var(--panel); overflow: auto; }
+section.main { padding: 10px 14px; min-width: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; }
+h2:first-child { margin-top: 0; }
+.field { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 6px; margin: 4px 0; }
+.field label { color: var(--text); }
+.field select { max-width: 170px; }
+.field.disabled label { color: var(--muted); }
+.help { color: var(--muted); font-size: 11px; margin: -2px 0 6px; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.jobs { margin-top: 8px; }
+.job { border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; margin: 4px 0; font-size: 12px; }
+.job .st { font-weight: 600; }
+pre.log { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; max-height: 220px; overflow: auto; font-size: 11px; white-space: pre-wrap; margin: 6px 0 0; }
+.transport { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+#time { font-variant-numeric: tabular-nums; min-width: 110px; }
+#timeline { width: 100%; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: crosshair; touch-action: none; }
+#hover { color: var(--muted); min-height: 18px; font-size: 12px; margin: 2px 0 6px; }
+.karaoke { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.kr { display: grid; grid-template-columns: 170px 1fr; gap: 10px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.kr:last-child { border-bottom: 0; }
+.kr .name { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kr .name i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+.kr .text { font-size: 20px; line-height: 1.3; min-height: 26px; }
+.kr .text .c { opacity: .38; }
+.kr .text .c.s { opacity: 1; }
+.kr .note { font-size: 11px; color: var(--muted); margin-left: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--bg); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.applied td:first-child { box-shadow: inset 3px 0 var(--good); }
+td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; }
+.tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+#lines { max-height: 420px; }
+#lines td.txt { white-space: normal; min-width: 240px; }
+#lines tr { cursor: pointer; }
+#lines tr.cur td { background: var(--panel2); }
+.cell { display: inline-block; min-width: 46px; text-align: right; border-radius: 4px; padding: 0 4px; }
+.cell.low { background: rgba(255,181,71,.18); color: var(--warn); }
+.cell.failed { background: rgba(255,107,107,.18); color: var(--bad); }
+.ref { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.ref .words { font-size: 18px; line-height: 1.8; margin: 6px 0; }
+.ref .w { padding: 1px 3px; border-radius: 4px; cursor: pointer; }
+.ref .w.done { color: var(--good); }
+.ref .w.cursor { outline: 2px solid var(--accent); }
+.ref .w small { font-size: 10px; color: var(--muted); margin-left: 2px; }
+.tag { display: inline-block; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.tag.on { border-color: var(--accent); color: var(--accent); }
+kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+.empty { color: var(--muted); padding: 20px; text-align: center; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sync lab</h1>
+  <select id="song"></select>
+  <span id="songInfo"></span>
+  <button id="delRecBtn" style="margin-left:auto" title="Delete every song the overlay recorded from Spotify">Delete all recordings…</button>
+</header>
+<main>
+  <aside>
+    <h2>Run settings</h2>
+    <div id="form"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="runBtn">Run</button>
+      <button id="defaultsBtn" title="align.py --pending uses these settings from now on">Use as default</button>
+      <button id="resetBtn" title="Back to the built-in settings">Reset</button>
+    </div>
+    <h2>Sweep</h2>
+    <div class="help">Queue one run per value, with everything else as above. Separation and model output are cached, so sweeps over the timing settings are quick.</div>
+    <div class="row">
+      <select id="sweepParam"></select>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <input type="text" id="sweepValues" style="flex:1" placeholder="values, comma separated">
+      <button id="sweepBtn">Queue</button>
+    </div>
+    <h2>Jobs</h2>
+    <div id="jobs" class="jobs"><div class="muted">Nothing queued.</div></div>
+  </aside>
+  <section class="main" id="mainSection">
+    <div class="empty" id="noSong">Pick a song at the top. Songs show up here once the overlay has recorded them, or when you start the lab with your own audio files.</div>
+    <div id="songView" hidden>
+      <div class="transport">
+        <button id="playBtn" class="primary" style="min-width:70px">Play</button>
+        <span id="time">0:00.0</span>
+        <label>Listen to <select id="source"></select></label>
+        <label>Speed <select id="rate"><option>0.5</option><option>0.75</option><option selected>1</option></select></label>
+        <label>Zoom <input type="range" id="zoom" min="2" max="60" value="12" style="width:110px"></label>
+        <label><input type="checkbox" id="follow" checked> Follow</label>
+        <span class="muted"><kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> 2 s · <kbd>[</kbd><kbd>]</kbd> line</span>
+      </div>
+      <canvas id="timeline" height="200"></canvas>
+      <div id="hover"></div>
+      <div class="karaoke" id="karaoke"></div>
+
+      <h2>Runs</h2>
+      <div class="tablewrap"><table id="runs"></table></div>
+      <div class="help" style="margin-top:4px">Error columns compare each run's word start times with your tapped reference (below): <b>error</b> is the median distance, <b>bias</b> is the average offset (positive means the run is late, so try a negative offset), <b>±100</b> is the share of words within 100 ms, <b>timed</b> is the share of reference words the run timed at all.</div>
+
+      <h2>Reference timing</h2>
+      <div class="ref" id="refPanel">
+        <div class="row">
+          <button id="tapBtn">Start tapping</button>
+          <label>Tap delay <input type="number" id="latency" value="0" step="10"> ms</label>
+          <button id="clearLineBtn">Clear this line</button>
+          <span class="muted" id="refStats"></span>
+        </div>
+        <div class="help" style="margin-top:6px">Tap along to make a reference: while tapping, press <kbd>Space</kbd> or <kbd>J</kbd> at the start of each highlighted word, <kbd>Backspace</kbd> to undo, <kbd>P</kbd> to pause. Click a word to tap from there. A slower speed helps. Tap delay is subtracted from every tap if you tend to tap late. A few lines is enough to score runs.</div>
+        <div class="words" id="refWords"></div>
+      </div>
+
+      <h2>Lines</h2>
+      <div class="tablewrap" id="lines"><table id="linesTable"></table></div>
+    </div>
+  </section>
+</main>
+<audio id="audio" preload="auto"></audio>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const COLORS = ["#6aa8ff", "#ff8f5a", "#5fd38d", "#e07bff", "#ffd25a", "#4fd6d6", "#ff6b9a", "#a8b4ff", "#b8e05a", "#ffa8d8"];
+const FIELDS = [
+  { key: "separator", label: "Vocal separator", type: "select", opts: () => S.options.separators },
+  { key: "aligner", label: "Aligner", type: "select", opts: () => S.options.aligners },
+  { key: "mode", label: "Strategy", type: "select", opts: () => ({ line: "Line by line", song: "Whole song" }),
+    help: "Whole song copes better when the LRC line times are off." },
+  { key: "unit", label: "Timing unit", type: "select", opts: () => ({ syllable: "Syllables", word: "Words" }) },
+  { key: "lang", label: "Language", type: "text", placeholder: "auto", help: "For syllable splitting, e.g. en, nl, ja." },
+  { key: "pad_before_ms", label: "Window before line (ms)", type: "number", step: 50, only: "line" },
+  { key: "pad_after_ms", label: "Window after next line (ms)", type: "number", step: 50, only: "line" },
+  { key: "max_window_ms", label: "Max window (ms)", type: "number", step: 1000, only: "line" },
+  { key: "anchor_slack_ms", label: "Anchor slack (ms)", type: "number", step: 250, only: "song",
+    help: "How far a line may drift from its LRC time. 0 = anywhere." },
+  { key: "star", label: "Wildcard padding", type: "checkbox",
+    help: "Lets the aligner skip unrelated sound (ad-libs, backing vocals) at window edges." },
+  { key: "min_confidence", label: "Min confidence", type: "number", step: 0.25,
+    help: "Lines scoring below this keep line timing only." },
+  { key: "offset_ms", label: "Offset (ms)", type: "number", step: 10, help: "Positive makes every syllable later." },
+  { key: "retime_lines", label: "Move line starts", type: "checkbox", help: "Start each aligned line at its first syllable." },
+];
+
+const S = {
+  options: null, songs: [], song: null, cfg: {}, compare: [], jobs: [], ref: {}, tapping: false,
+  cursor: { line: 0, unit: 0 }, tapHistory: [], peaks: null, view: { start: 0, span: 12000 },
+  sourceOffset: 0, colorOf: {}, hover: "", lastLine: -1,
+};
+const audio = $("audio");
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+const enc = encodeURIComponent;
+const fmt = (ms) => { if (ms == null || isNaN(ms)) return "–"; const neg = ms < 0; ms = Math.abs(ms);
+  const m = Math.floor(ms / 60000), s = (ms % 60000) / 1000; return (neg ? "-" : "") + m + ":" + s.toFixed(1).padStart(4, "0"); };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const store = { get(k, d) { try { const v = localStorage.getItem("synclab:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("synclab:" + k, JSON.stringify(v)); } catch {} } };
+
+// ---------------------------------------------------------------- settings form
+function renderForm() {
+  const f = $("form");
+  f.innerHTML = "";
+  for (const fd of FIELDS) {
+    const wrap = document.createElement("div");
+    wrap.className = "field"; wrap.dataset.key = fd.key;
+    const id = "f_" + fd.key;
+    let input;
+    if (fd.type === "select") {
+      input = document.createElement("select");
+      for (const [v, label] of Object.entries(fd.opts())) {
+        const o = document.createElement("option"); o.value = v; o.textContent = label; input.append(o);
+      }
+    } else {
+      input = document.createElement("input");
+      input.type = fd.type;
+      if (fd.step) input.step = fd.step;
+      if (fd.placeholder) input.placeholder = fd.placeholder;
+      if (fd.type === "text") input.style.width = "90px";
+    }
+    input.id = id;
+    input.addEventListener("change", () => { S.cfg[fd.key] = readField(fd); store.set("cfg", S.cfg); updateFormState(); });
+    const label = document.createElement("label"); label.htmlFor = id; label.textContent = fd.label;
+    wrap.append(label, input);
+    f.append(wrap);
+    if (fd.help) { const h = document.createElement("div"); h.className = "help"; h.textContent = fd.help; h.dataset.helpFor = fd.key; f.append(h); }
+  }
+  const sp = $("sweepParam");
+  sp.innerHTML = FIELDS.map((fd) => `<option value="${fd.key}">${esc(fd.label)}</option>`).join("");
+  sp.value = store.get("sweepParam", "offset_ms");
+  sp.onchange = () => { store.set("sweepParam", sp.value); sweepPlaceholder(); };
+  sweepPlaceholder();
+}
+function sweepPlaceholder() {
+  const fd = FIELDS.find((f) => f.key === $("sweepParam").value);
+  const ex = { offset_ms: "-150, -75, 0, 75, 150", pad_before_ms: "200, 400, 800", pad_after_ms: "0, 300, 800",
+    min_confidence: "-5, -4, -3", anchor_slack_ms: "0, 1000, 3000", max_window_ms: "10000, 30000" }[fd.key];
+  $("sweepValues").placeholder = fd.type === "select" ? Object.keys(fd.opts()).join(", ")
+    : fd.type === "checkbox" ? "true, false" : (ex || "values, comma separated");
+  if (fd.type === "select") $("sweepValues").value = Object.keys(fd.opts()).join(", ");
+  else $("sweepValues").value = "";
+}
+function readField(fd) {
+  const el = $("f_" + fd.key);
+  if (fd.type === "checkbox") return el.checked;
+  if (fd.type === "number") return el.value === "" ? S.options.builtin[fd.key] : Number(el.value);
+  return el.value;
+}
+function writeForm(cfg) {
+  for (const fd of FIELDS) {
+    const el = $("f_" + fd.key);
+    if (fd.type === "checkbox") el.checked = !!cfg[fd.key]; else el.value = cfg[fd.key] ?? "";
+  }
+  updateFormState();
+}
+function updateFormState() {
+  const even = S.cfg.aligner === "even";
+  for (const fd of FIELDS) {
+    let off = false;
+    if (fd.only && fd.only !== S.cfg.mode) off = true;
+    if (even && ["separator", "mode", "star", "min_confidence", "pad_before_ms", "pad_after_ms", "max_window_ms", "anchor_slack_ms"].includes(fd.key)) off = true;
+    const wrap = document.querySelector(`.field[data-key="${fd.key}"]`);
+    wrap.classList.toggle("disabled", off);
+    $("f_" + fd.key).disabled = off;
+  }
+}
+function parseSweepValue(fd, raw) {
+  raw = raw.trim();
+  if (fd.type === "number") { const n = Number(raw); if (isNaN(n)) throw new Error(`"${raw}" isn't a number`); return n; }
+  if (fd.type === "checkbox") return /^(1|true|yes|on)$/i.test(raw);
+  if (fd.type === "select" && !(raw in fd.opts())) throw new Error(`"${raw}" isn't one of ${Object.keys(fd.opts()).join(", ")}`);
+  return raw;
+}
+
+// ---------------------------------------------------------------- songs
+async function loadSongs() {
+  S.songs = await api("/api/songs");
+  const sel = $("song");
+  sel.innerHTML = `<option value="">${S.songs.length ? "Choose a song…" : "No recorded songs yet"}</option>` +
+    S.songs.map((s) => `<option value="${esc(s.id)}">${esc(s.artist)} – ${esc(s.title)}${s.runs ? `  (${s.runs} runs)` : ""}</option>`).join("");
+  const last = store.get("song", "");
+  if (S.songs.some((s) => s.id === last)) { sel.value = last; await openSong(last); }
+}
+async function openSong(id, keepView = false) {
+  if (!id) { S.song = null; $("songView").hidden = true; $("noSong").hidden = false; return; }
+  store.set("song", id);
+  const song = await api(`/api/song/${enc(id)}`);
+  const changed = !S.song || S.song.id !== id;
+  S.song = song;
+  S.ref = (song.reference && song.reference.words) || {};
+  if (changed) {
+    S.compare = store.get("compare:" + id, null) || song.runs.slice(-3).map((r) => r.id);
+    S.cursor = { line: firstLineWithUnits(0), unit: 0 }; S.tapHistory = [];
+  }
+  S.compare = S.compare.filter((rid) => song.runs.some((r) => r.id === rid));
+  song.runs.forEach((r, i) => { S.colorOf[r.id] = COLORS[i % COLORS.length]; });
+  $("noSong").hidden = true; $("songView").hidden = false;
+  const a = song.audio;
+  $("songInfo").innerHTML = `${esc(song.artist)} – ${esc(song.title)} · ${song.lines.length} lines · ` +
+    (a ? `${a.kind === "recording" ? "Spotify recording" : esc(a.name)}${a.offset_ms ? ` (starts at ${fmt(a.offset_ms)})` : ""}` : "no audio") +
+    (song.problem ? ` · <span class="bad">${esc(song.problem)}</span>` : "");
+  if (changed) setupSources();
+  else refreshSourceOptions();
+  renderRuns(); renderLines(); renderRef(); renderKaraoke(true);
+  if (changed && !keepView) S.view.start = Math.max(0, (song.lines[0]?.time_ms || 0) - 2000);
+  draw();
+  pollJobs();
+}
+function refreshSourceOptions() {
+  const sel = $("source"), cur = sel.value;
+  sel.innerHTML = `<option value="mix">Song (mix)</option>` +
+    S.song.vocals.map((v) => `<option value="vocals:${esc(v)}">Vocals: ${esc(S.options.separators[v] ? v : v)}</option>`).join("");
+  sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "mix";
+}
+function setupSources() {
+  refreshSourceOptions();
+  setSource($("source").value, 0);
+}
+async function setSource(src, keepMs) {
+  const t = keepMs ?? songMs();
+  const wasPlaying = !audio.paused;
+  audio.src = `/audio/${enc(S.song.id)}/${enc(src)}`;
+  S.sourceOffset = src === "mix" ? (S.song.audio?.offset_ms || 0) : 0;
+  audio.playbackRate = Number($("rate").value);
+  await new Promise((r) => { audio.addEventListener("loadedmetadata", r, { once: true }); audio.addEventListener("error", r, { once: true }); });
+  seek(t);
+  if (wasPlaying) audio.play();
+  S.peaks = null;
+  api(`/api/song/${enc(S.song.id)}/peaks?source=${enc(src)}`).then((p) => { S.peaks = p; draw(); }).catch(() => {});
+}
+const songMs = () => audio.currentTime * 1000 + S.sourceOffset;
+function seek(ms) { audio.currentTime = Math.max(0, (ms - S.sourceOffset) / 1000); if (audio.paused) { renderKaraoke(); draw(); } }
+
+// ---------------------------------------------------------------- runs & scoring
+function runById(id) { return S.song.runs.find((r) => r.id === id); }
+function comparedRuns() { return S.compare.map(runById).filter(Boolean); }
+
+/** Start time of each word (unit) of line `li` in a run, or null where it has no timing. */
+function unitStarts(line, runLine) {
+  const units = line.units;
+  if (!runLine || !runLine.segments || !runLine.segments.length) return units.map(() => null);
+  const starts = []; let pos = 0;
+  for (const s of runLine.segments) { starts.push([pos, s.start_ms]); pos += [...s.text].length; }
+  return units.map((u) => {
+    let best = null;
+    for (const [p, ms] of starts) { if (p <= u.offset) best = ms; else break; }
+    return best;
+  });
+}
+function scoreRun(run) {
+  const errs = []; let refCount = 0;
+  S.song.lines.forEach((line, li) => {
+    const ref = S.ref[li]; if (!ref) return;
+    const got = unitStarts(line, run.lines[li]);
+    ref.forEach((r, k) => { if (r == null) return; refCount++; if (got[k] != null) errs.push(got[k] - r); });
+  });
+  if (!refCount) return null;
+  const abs = errs.map(Math.abs).sort((a, b) => a - b);
+  return {
+    n: refCount,
+    median: abs.length ? abs[Math.floor(abs.length / 2)] : null,
+    bias: errs.length ? errs.reduce((a, b) => a + b, 0) / errs.length : null,
+    within: abs.length ? abs.filter((e) => e <= 100).length / refCount : 0,
+    timed: errs.length / refCount,
+  };
+}
+function renderRuns() {
+  const t = $("runs");
+  const runs = S.song.runs;
+  if (!runs.length) { t.innerHTML = `<tr><td class="muted" style="padding:14px">No runs yet. Pick settings on the left and press Run. The first run on a song separates the vocals, which takes a minute or two on CPU.</td></tr>`; return; }
+  const scores = Object.fromEntries(runs.map((r) => [r.id, scoreRun(r)]));
+  const bestMedian = Math.min(...Object.values(scores).filter((s) => s && s.median != null).map((s) => s.median));
+  const applied = S.song.applied?.run_id;
+  t.innerHTML = `<tr><th></th><th>Run</th><th>Settings</th><th class="num">Lines timed</th><th class="num">Confidence</th>
+    <th class="num">Error</th><th class="num">Bias</th><th class="num">±100</th><th class="num">Timed</th><th class="num">Took</th><th></th></tr>` +
+    runs.slice().reverse().map((r) => {
+      const sc = scores[r.id], st = r.stats, c = r.config;
+      const on = S.compare.includes(r.id);
+      const settings = [c.aligner === "even" ? "even split" : `${c.separator} · ${c.aligner} · ${c.mode}`, c.unit,
+        c.offset_ms ? `${c.offset_ms > 0 ? "+" : ""}${c.offset_ms} ms` : null, c.retime_lines ? "moved lines" : null].filter(Boolean).join(" · ");
+      return `<tr class="${applied === r.id ? "applied" : ""}" data-id="${r.id}">
+        <td><input type="checkbox" data-act="cmp" ${on ? "checked" : ""} title="Compare"> <span class="sw" style="background:${S.colorOf[r.id]}"></span></td>
+        <td><span data-act="rename" title="Click to rename" style="cursor:text">${esc(r.label)}</span>${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}</td>
+        <td class="muted" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
+        <td class="num">${st.aligned}/${st.lines}</td>
+        <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}</td>
+        <td class="num ${sc && sc.median === bestMedian ? "good" : ""}">${sc && sc.median != null ? Math.round(sc.median) + " ms" : "–"}</td>
+        <td class="num">${sc && sc.bias != null ? (sc.bias > 0 ? "+" : "") + Math.round(sc.bias) + " ms" : "–"}</td>
+        <td class="num">${sc ? Math.round(sc.within * 100) + "%" : "–"}</td>
+        <td class="num">${sc ? Math.round(sc.timed * 100) + "%" : "–"}</td>
+        <td class="num muted">${st.total_s}s</td>
+        <td><button data-act="load" title="Put this run's settings in the form">Settings</button>
+            <button data-act="apply" title="Write this run's timing into the overlay's lyrics cache">Use in overlay</button>
+            <button data-act="del" title="Delete run">✕</button></td></tr>`;
+    }).join("") +
+    (applied ? `<tr><td colspan="11" class="muted">The overlay is using “${esc(S.song.applied.label || applied)}”. <button data-act="unapply">Back to line timing</button></td></tr>` : "");
+}
+$("runs").addEventListener("click", async (e) => {
+  const act = e.target.dataset.act; if (!act) return;
+  const id = e.target.closest("tr")?.dataset.id;
+  const run = id && runById(id);
+  if (act === "cmp") {
+    S.compare = e.target.checked ? [...S.compare, id] : S.compare.filter((x) => x !== id);
+    store.set("compare:" + S.song.id, S.compare); renderLines(); renderKaraoke(true); draw();
+  } else if (act === "load") {
+    S.cfg = { ...S.options.builtin, ...run.config }; writeForm(S.cfg); store.set("cfg", S.cfg);
+  } else if (act === "apply") {
+    await api(`/api/song/${enc(S.song.id)}/apply`, { method: "POST", body: { run_id: id } });
+    await openSong(S.song.id, true);
+  } else if (act === "unapply") {
+    await api(`/api/song/${enc(S.song.id)}/apply`, { method: "POST", body: {} });
+    await openSong(S.song.id, true);
+  } else if (act === "del") {
+    if (!confirm(`Delete run “${run.label}”?`)) return;
+    await api(`/api/song/${enc(S.song.id)}/runs/${enc(id)}`, { method: "DELETE" });
+    await openSong(S.song.id, true);
+  } else if (act === "rename") {
+    const label = prompt("Run name", run.label); if (label == null) return;
+    await api(`/api/song/${enc(S.song.id)}/label/${enc(id)}`, { method: "POST", body: { label } });
+    run.label = label; renderRuns(); renderKaraoke(true);
+  }
+});
+
+function renderLines() {
+  const runs = comparedRuns();
+  const cur = currentLineIndex(songMs());
+  $("linesTable").innerHTML = `<tr><th class="num">Time</th><th>Line</th>${runs.map((r) => `<th class="num"><span class="sw" style="background:${S.colorOf[r.id]}"></span></th>`).join("")}<th class="num">Tapped</th></tr>` +
+    S.song.lines.map((l, i) => {
+      if (!l.text.trim()) return "";
+      const ref = S.ref[i]; const tapped = ref ? ref.filter((x) => x != null).length : 0;
+      return `<tr data-i="${i}" class="${i === cur ? "cur" : ""}"><td class="num muted">${fmt(l.time_ms)}</td><td class="txt">${esc(l.text)}</td>` +
+        runs.map((r) => { const rl = r.lines[i]; if (!rl) return "<td></td>";
+          const v = rl.confidence == null ? (rl.status === "ok" ? "✓" : rl.status) : rl.confidence.toFixed(2);
+          return `<td class="num"><span class="cell ${rl.status === "ok" ? "" : rl.status}" title="${rl.status}">${v}</span></td>`; }).join("") +
+        `<td class="num muted">${tapped ? `${tapped}/${l.units.length}` : ""}</td></tr>`;
+    }).join("");
+}
+$("linesTable").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-i]"); if (!tr) return;
+  const i = Number(tr.dataset.i);
+  seek(S.song.lines[i].time_ms - 800);
+  if (S.tapping) { S.cursor = { line: i, unit: 0 }; renderRef(); }
+});
+
+// ---------------------------------------------------------------- jobs
+let pollTimer = null;
+async function pollJobs() {
+  clearTimeout(pollTimer);
+  if (!S.song) return;
+  const jobs = await api(`/api/jobs?song=${enc(S.song.id)}`).catch(() => []);
+  const prevDone = new Set(S.jobs.filter((j) => j.status === "done").map((j) => j.id));
+  const finished = jobs.filter((j) => j.status === "done" && !prevDone.has(j.id) && S.jobs.some((p) => p.id === j.id));
+  S.jobs = jobs;
+  renderJobs();
+  if (finished.length) {
+    S.compare = [...S.compare, ...finished.map((j) => j.run_id)];
+    store.set("compare:" + S.song.id, S.compare);
+    await openSong(S.song.id, true);
+    return;
+  }
+  if (jobs.some((j) => j.status === "queued" || j.status === "running")) pollTimer = setTimeout(pollJobs, 1000);
+}
+function renderJobs() {
+  const el = $("jobs");
+  const jobs = S.jobs.slice().reverse().slice(0, 8);
+  if (!jobs.length) { el.innerHTML = `<div class="muted">Nothing queued.</div>`; return; }
+  const active = S.jobs.find((j) => j.status === "running") || jobs[0];
+  el.innerHTML = jobs.map((j) => `<div class="job"><span class="st ${j.status === "error" ? "bad" : j.status === "done" ? "good" : "warn"}">${j.status}</span> ${esc(j.label || summary(j.config))}${j.error ? `<div class="bad">${esc(j.error)}</div>` : ""}</div>`).join("") +
+    `<pre class="log" id="joblog">${esc(active.log.join("\n"))}</pre>`;
+  const log = $("joblog"); log.scrollTop = log.scrollHeight;
+}
+function summary(c) { return c.aligner === "even" ? "even split" : `${c.separator} + ${c.aligner}, ${c.mode}, ${c.unit}`; }
+async function submit(configs, labels) {
+  if (!S.song) { alert("Pick a song first."); return; }
+  try {
+    await api(`/api/song/${enc(S.song.id)}/runs`, { method: "POST", body: { configs, labels } });
+    const jobs = await api(`/api/jobs?song=${enc(S.song.id)}`); S.jobs = jobs; renderJobs();
+    pollTimer = setTimeout(pollJobs, 500);
+  } catch (e) { alert(e.message); }
+}
+$("runBtn").onclick = () => submit([{ ...S.cfg }], []);
+$("sweepBtn").onclick = () => {
+  const fd = FIELDS.find((f) => f.key === $("sweepParam").value);
+  try {
+    const values = $("sweepValues").value.split(",").filter((v) => v.trim()).map((v) => parseSweepValue(fd, v));
+    if (!values.length) throw new Error("Enter at least one value.");
+    submit(values.map((v) => ({ ...S.cfg, [fd.key]: v })), values.map((v) => `${fd.label.replace(/ \(ms\)$/, "")} = ${v}`));
+  } catch (e) { alert(e.message); }
+};
+$("defaultsBtn").onclick = async () => {
+  await api("/api/defaults", { method: "POST", body: S.cfg });
+  S.options.defaults = { ...S.cfg };
+  $("defaultsBtn").textContent = "Saved ✓"; setTimeout(() => ($("defaultsBtn").textContent = "Use as default"), 1500);
+};
+$("delRecBtn").onclick = async () => {
+  try {
+    const o = await api("/api/recordings");
+    if (!o.recordings && !o.leftovers && !o.markers) { alert("There are no recordings to delete."); return; }
+    if (!confirm(`Delete ${o.recordings} recording${o.recordings === 1 ? "" : "s"}` +
+      (o.leftovers ? ` and ${o.leftovers} unfinished one${o.leftovers === 1 ? "" : "s"}` : "") +
+      ` (${o.mb} MB)? This also deletes the separated vocals the lab made from them. ` +
+      `Runs you made stay, but those songs leave the song list until they're recorded again. This can't be undone.`)) return;
+    let clear = false;
+    if (o.aligned) clear = confirm(`${o.aligned} of these songs have syllable timing in the overlay. ` +
+      `Remove that timing too, so the overlay records them again?\n\nOK: remove it. Cancel: keep it.`);
+    const r = await api("/api/recordings/delete", { method: "POST", body: { clear_timing: clear } });
+    alert(`Deleted ${r.recordings + r.leftovers} recording${r.recordings + r.leftovers === 1 ? "" : "s"}` +
+      (r.cleared ? ` and removed syllable timing from ${r.cleared} song${r.cleared === 1 ? "" : "s"}` : "") +
+      `. Songs you play from now on are recorded fresh (with recording turned on in the overlay).`);
+    audio.pause(); audio.removeAttribute("src");
+    S.song = null; await loadSongs();
+    if (!S.song) openSong("");
+  } catch (e) { alert(e.message); }
+};
+$("resetBtn").onclick = () => { S.cfg = { ...S.options.builtin }; writeForm(S.cfg); store.set("cfg", S.cfg); };
+
+// ---------------------------------------------------------------- karaoke preview
+function lineIndexAt(lines, t) {
+  let idx = -1;
+  for (let i = 0; i < lines.length; i++) { if (lines[i].time_ms <= t) idx = i; else break; }
+  return idx;
+}
+function currentLineIndex(t) { return lineIndexAt(S.song.lines, t); }
+function sungChars(line, t) {
+  if (!line.segments || !line.segments.length) return null;
+  let sung = 0;
+  for (const s of line.segments) {
+    const len = [...s.text].length;
+    if (t >= s.end_ms) { sung += len; continue; }
+    if (t > s.start_ms) sung += len * Math.min(1, (t - s.start_ms) / Math.max(1, s.end_ms - s.start_ms));
+    break;
+  }
+  return sung;
+}
+const krCache = new Map();
+function renderKaraoke(rebuild = false) {
+  if (!S.song) return;
+  const t = songMs();
+  const box = $("karaoke");
+  const rows = [];
+  for (const r of comparedRuns()) rows.push({ key: r.id, name: r.label, color: S.colorOf[r.id], lines: r.lines, kind: "run" });
+  if (Object.keys(S.ref).length) rows.push({ key: "__ref", name: "Your reference", color: "#ffffff", kind: "ref" });
+  if (!rows.length) rows.push({ key: "__lrc", name: "LRC line timing", color: "#888", lines: S.song.lines, kind: "lrc" });
+  if (rebuild || box.childElementCount !== rows.length || rows.some((r, i) => box.children[i]?.dataset.key !== r.key)) {
+    box.innerHTML = rows.map((r) => `<div class="kr" data-key="${r.key}"><div class="name" title="${esc(r.name)}"><i style="background:${r.color}"></i>${esc(r.name)}</div><div class="text"></div></div>`).join("");
+    krCache.clear();
+  }
+  rows.forEach((r, i) => {
+    const el = box.children[i].querySelector(".text");
+    let li, text, sung, note = "";
+    if (r.kind === "ref") {
+      li = currentLineIndex(t);
+      const line = S.song.lines[li]; text = line ? line.text : "";
+      const ref = S.ref[li] || [];
+      sung = 0;
+      if (line) line.units.forEach((u, k) => { if (ref[k] != null && t >= ref[k]) sung = u.offset + [...u.text].length; });
+      if (line && !ref.some((x) => x != null)) note = "not tapped";
+    } else {
+      li = lineIndexAt(r.lines, t);
+      const line = r.lines[li]; text = line ? line.text : "";
+      sung = line ? sungChars(line, t) : null;
+      if (line && sung == null && r.kind === "run") note = line.status === "empty" ? "" : `no syllable timing (${line.status}${line.confidence != null ? " " + line.confidence.toFixed(2) : ""})`;
+      if (sung == null) sung = r.kind === "lrc" ? [...text].length : 0;
+    }
+    const key = li + "|" + text;
+    if (krCache.get(r.key) !== key) {
+      el.innerHTML = [...text].map((c) => `<span class="c">${esc(c)}</span>`).join("") + (note ? `<span class="note">${esc(note)}</span>` : "");
+      krCache.set(r.key, key);
+    }
+    const chars = el.querySelectorAll(".c");
+    const full = Math.floor(sung), frac = sung - full;
+    chars.forEach((c, k) => {
+      c.classList.toggle("s", k < full);
+      c.style.opacity = k === full && frac > 0 ? String(0.38 + 0.62 * frac) : "";
+      c.style.color = k < full || (k === full && frac > 0) ? r.color : "";
+    });
+  });
+}
+
+// ---------------------------------------------------------------- reference tapping
+function firstLineWithUnits(from) {
+  for (let i = from; i < (S.song?.lines.length || 0); i++) if (S.song.lines[i].units.length) return i;
+  return from;
+}
+function renderRef() {
+  const lines = S.song.lines;
+  const li = S.cursor.line;
+  const show = [];
+  for (let i = Math.max(0, li - 1); i < lines.length && show.length < 3; i++) if (lines[i].units.length) show.push(i);
+  $("refWords").innerHTML = show.map((i) => {
+    const ref = S.ref[i] || [];
+    return `<div><span class="muted" style="font-size:12px">${fmt(lines[i].time_ms)}</span> ` + lines[i].units.map((u, k) => {
+      const done = ref[k] != null, cur = S.tapping && i === li && k === S.cursor.unit;
+      return `<span class="w ${done ? "done" : ""} ${cur ? "cursor" : ""}" data-l="${i}" data-k="${k}">${esc(u.text.trim())}${done ? `<small>${fmt(ref[k])}</small>` : ""}</span>`;
+    }).join(" ") + "</div>";
+  }).join("");
+  const total = lines.reduce((a, l) => a + l.units.length, 0);
+  const tapped = Object.values(S.ref).reduce((a, r) => a + r.filter((x) => x != null).length, 0);
+  $("refStats").textContent = `${tapped} of ${total} words tapped`;
+  $("tapBtn").textContent = S.tapping ? "Stop tapping" : "Start tapping";
+  $("tapBtn").classList.toggle("primary", S.tapping);
+}
+$("refWords").addEventListener("click", (e) => {
+  const w = e.target.closest(".w"); if (!w) return;
+  S.cursor = { line: Number(w.dataset.l), unit: Number(w.dataset.k) };
+  S.tapping = true;
+  const ref = S.ref[S.cursor.line];
+  const prev = S.cursor.unit > 0 && ref ? ref[S.cursor.unit - 1] : null;
+  seek((prev ?? S.song.lines[S.cursor.line].time_ms) - 1500);
+  renderRef();
+});
+$("tapBtn").onclick = () => { S.tapping = !S.tapping; if (S.tapping && audio.paused) { seek(S.song.lines[S.cursor.line].time_ms - 1500); } renderRef(); };
+$("clearLineBtn").onclick = () => { delete S.ref[S.cursor.line]; S.cursor.unit = 0; saveRef(); renderRef(); renderRuns(); renderLines(); draw(); };
+let refSaveTimer = null;
+function saveRef() {
+  clearTimeout(refSaveTimer);
+  refSaveTimer = setTimeout(() => api(`/api/song/${enc(S.song.id)}/reference`, { method: "PUT", body: { words: S.ref } }).catch((e) => alert("Couldn't save reference: " + e.message)), 600);
+}
+function tap() {
+  const lines = S.song.lines;
+  const { line, unit } = S.cursor;
+  if (line >= lines.length || !lines[line].units.length) return;
+  const ms = Math.round(songMs() - Number($("latency").value || 0));
+  const ref = S.ref[line] || (S.ref[line] = lines[line].units.map(() => null));
+  S.tapHistory.push({ line, unit, prev: ref[unit] });
+  ref[unit] = ms;
+  if (unit + 1 < lines[line].units.length) S.cursor.unit++;
+  else S.cursor = { line: firstLineWithUnits(line + 1), unit: 0 };
+  saveRef(); renderRef(); renderRuns(); draw();
+}
+function untap() {
+  const h = S.tapHistory.pop(); if (!h) return;
+  S.ref[h.line][h.unit] = h.prev;
+  S.cursor = { line: h.line, unit: h.unit };
+  saveRef(); renderRef(); renderRuns(); draw();
+}
+
+// ---------------------------------------------------------------- timeline
+const cv = $("timeline"), ctx = cv.getContext("2d");
+const LANE = { wave: 64, lrc: 18, ref: 26, run: 28 };
+function laneLayout() {
+  const runs = comparedRuns();
+  let y = 0; const L = {};
+  L.wave = [y, LANE.wave]; y += LANE.wave;
+  L.lrc = [y, LANE.lrc]; y += LANE.lrc;
+  L.ref = [y, LANE.ref]; y += LANE.ref;
+  L.runs = runs.map((r) => { const v = [y, LANE.run, r]; y += LANE.run; return v; });
+  L.height = y + 4;
+  return L;
+}
+function draw() {
+  if (!S.song) return;
+  const L = laneLayout();
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(L.height * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(L.height * dpr); cv.style.height = L.height + "px";
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, L.height);
+  const v = S.view, x = (ms) => ((ms - v.start) / v.span) * w;
+  const css = getComputedStyle(document.documentElement);
+  const C = (n) => css.getPropertyValue(n).trim();
+  ctx.font = "11px " + C("--font");
+  ctx.textBaseline = "middle";
+
+  // seconds grid
+  ctx.strokeStyle = C("--line"); ctx.fillStyle = C("--muted"); ctx.lineWidth = 1;
+  const step = v.span > 30000 ? 5000 : v.span > 12000 ? 2000 : 1000;
+  for (let t = Math.ceil(v.start / step) * step; t < v.start + v.span; t += step) {
+    const px = Math.round(x(t)) + 0.5; ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, L.height); ctx.stroke();
+    ctx.fillText(fmt(t).replace(/\.\d$/, ""), px + 3, 8);
+  }
+  // waveform
+  if (S.peaks) {
+    const [y0, h] = L.wave, mid = y0 + h / 2 + 4, p = S.peaks.peaks, bin = S.peaks.bin_ms, off = S.peaks.offset_ms;
+    ctx.fillStyle = C("--wave");
+    for (let px = 0; px < w; px++) {
+      const a = Math.floor((v.start + (px / w) * v.span - off) / bin), b = Math.max(a + 1, Math.floor((v.start + ((px + 1) / w) * v.span - off) / bin));
+      let m = 0; for (let i = Math.max(0, a); i < Math.min(p.length, b); i++) if (p[i] > m) m = p[i];
+      const hh = (m / 255) * (h / 2 - 6); if (hh > 0.3) ctx.fillRect(px, mid - hh, 1, hh * 2);
+    }
+  }
+  // LRC line starts
+  {
+    const [y0, h] = L.lrc;
+    S.song.lines.forEach((l, i) => {
+      if (l.time_ms < v.start - 20000 || l.time_ms > v.start + v.span) return;
+      const px = x(l.time_ms);
+      ctx.fillStyle = C("--muted"); ctx.fillRect(px, y0 + 2, 1.5, h - 4);
+      ctx.save(); ctx.beginPath(); const nx = i + 1 < S.song.lines.length ? x(S.song.lines[i + 1].time_ms) : w;
+      ctx.rect(px + 3, y0, Math.max(0, nx - px - 6), h); ctx.clip();
+      ctx.fillText(l.text || "♪", px + 4, y0 + h / 2); ctx.restore();
+    });
+    label("LRC", y0, h);
+  }
+  // reference taps
+  {
+    const [y0, h] = L.ref;
+    ctx.fillStyle = "rgba(255,255,255,.04)"; ctx.fillRect(0, y0 + 1, w, h - 2);
+    for (const [li, arr] of Object.entries(S.ref)) {
+      const line = S.song.lines[li]; if (!line) continue;
+      arr.forEach((ms, k) => {
+        if (ms == null || ms < v.start - 2000 || ms > v.start + v.span) return;
+        const px = x(ms);
+        ctx.fillStyle = "#fff"; ctx.fillRect(px - 1, y0 + 3, 2, h - 6);
+        ctx.fillText(line.units[k].text.trim(), px + 4, y0 + h / 2);
+      });
+    }
+    label("you", y0, h);
+  }
+  // runs
+  for (const [y0, h, run] of L.runs) {
+    const col = S.colorOf[run.id];
+    run.lines.forEach((l, li) => {
+      const next = run.lines[li + 1]?.time_ms ?? l.time_ms + 5000;
+      if (next < v.start || l.time_ms > v.start + v.span) return;
+      if (l.status === "low" || l.status === "failed") {
+        ctx.fillStyle = l.status === "low" ? "rgba(255,181,71,.12)" : "rgba(255,107,107,.12)";
+        const a = x(l.time_ms), b = x(next); ctx.fillRect(a, y0 + 3, b - a, h - 6);
+        ctx.fillStyle = l.status === "low" ? C("--warn") : C("--bad");
+        ctx.fillText(`${l.status}${l.confidence != null ? " " + l.confidence.toFixed(2) : ""}`, a + 4, y0 + h / 2);
+        return;
+      }
+      for (const s of l.segments || []) {
+        if (s.end_ms < v.start || s.start_ms > v.start + v.span) continue;
+        const a = x(s.start_ms), b = Math.max(a + 2, x(s.end_ms));
+        ctx.fillStyle = col; ctx.globalAlpha = 0.28; ctx.fillRect(a, y0 + 3, b - a, h - 6);
+        ctx.globalAlpha = 1; ctx.fillRect(a, y0 + 3, 2, h - 6);
+        ctx.save(); ctx.beginPath(); ctx.rect(a + 2, y0, b - a - 3, h); ctx.clip();
+        ctx.fillStyle = C("--text"); ctx.fillText(s.text.trim(), a + 5, y0 + h / 2); ctx.restore();
+      }
+    });
+    ctx.fillStyle = col; ctx.fillRect(0, y0 + 3, 3, h - 6);
+  }
+  // playhead
+  const ph = x(songMs());
+  ctx.fillStyle = C("--accent"); ctx.fillRect(ph - 1, 0, 2, L.height);
+  function label(t, y0, h) { ctx.fillStyle = C("--muted"); ctx.fillText(t, w - ctx.measureText(t).width - 6, y0 + h / 2); }
+}
+let drag = null;
+cv.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, start: S.view.start, moved: false }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", (e) => {
+  const rect = cv.getBoundingClientRect();
+  const ms = S.view.start + ((e.clientX - rect.left) / rect.width) * S.view.span;
+  if (drag) {
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 3) { drag.moved = true; $("follow").checked = false; }
+    if (drag.moved) { S.view.start = Math.max(0, drag.start - (dx / rect.width) * S.view.span); draw(); }
+  }
+  $("hover").textContent = hoverText(ms, e.clientY - rect.top);
+});
+cv.addEventListener("pointerup", (e) => {
+  if (drag && !drag.moved) { const rect = cv.getBoundingClientRect(); seek(S.view.start + ((e.clientX - rect.left) / rect.width) * S.view.span); }
+  drag = null;
+});
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = cv.getBoundingClientRect();
+  const at = S.view.start + ((e.clientX - rect.left) / rect.width) * S.view.span;
+  if (e.ctrlKey || e.metaKey) {
+    const span = Math.min(60000, Math.max(2000, S.view.span * (e.deltaY > 0 ? 1.15 : 1 / 1.15)));
+    S.view.start = Math.max(0, at - ((at - S.view.start) * span) / S.view.span); S.view.span = span; $("zoom").value = span / 1000;
+  } else {
+    $("follow").checked = false;
+    S.view.start = Math.max(0, S.view.start + ((e.deltaX || e.deltaY) / rect.width) * S.view.span);
+  }
+  draw();
+}, { passive: false });
+function hoverText(ms, y) {
+  const L = laneLayout();
+  for (const [y0, h, run] of L.runs) {
+    if (y < y0 || y >= y0 + h) continue;
+    for (const [li, l] of run.lines.entries()) for (const s of l.segments || [])
+      if (ms >= s.start_ms && ms <= s.end_ms) return `${run.label}: “${s.text.trim()}” ${fmt(s.start_ms)} → ${fmt(s.end_ms)} (line ${li + 1}${l.confidence != null ? ", confidence " + l.confidence.toFixed(2) : ""})`;
+    return `${run.label} · ${fmt(ms)}`;
+  }
+  return fmt(ms);
+}
+$("zoom").oninput = () => { const t = songMs(); S.view.span = Number($("zoom").value) * 1000; S.view.start = Math.max(0, t - S.view.span * 0.3); draw(); };
+
+// ---------------------------------------------------------------- transport
+$("playBtn").onclick = () => (audio.paused ? audio.play() : audio.pause());
+audio.addEventListener("play", () => ($("playBtn").textContent = "Pause"));
+audio.addEventListener("pause", () => ($("playBtn").textContent = "Play"));
+audio.addEventListener("seeked", () => { renderKaraoke(); draw(); });
+$("source").onchange = () => setSource($("source").value);
+$("rate").onchange = () => (audio.playbackRate = Number($("rate").value));
+$("follow").onchange = () => draw();
+function frame() {
+  if (S.song) {
+    const t = songMs();
+    $("time").textContent = fmt(t) + (S.song.duration_ms ? " / " + fmt(S.song.duration_ms).replace(/\.\d$/, "") : "");
+    if (!audio.paused) {
+      if ($("follow").checked && (t < S.view.start || t > S.view.start + S.view.span * 0.7)) S.view.start = Math.max(0, t - S.view.span * 0.3);
+      renderKaraoke(); draw();
+      const li = currentLineIndex(t);
+      if (li !== S.lastLine) {
+        S.lastLine = li;
+        document.querySelectorAll("#linesTable tr.cur").forEach((r) => r.classList.remove("cur"));
+        const row = document.querySelector(`#linesTable tr[data-i="${li}"]`);
+        if (row) { row.classList.add("cur"); const box = $("lines"); if (row.offsetTop < box.scrollTop || row.offsetTop > box.scrollTop + box.clientHeight - 30) box.scrollTop = row.offsetTop - 60; }
+      }
+    }
+  }
+  requestAnimationFrame(frame);
+}
+document.addEventListener("keydown", (e) => {
+  if (!S.song || e.target.matches("input[type=text], input[type=number], select, textarea")) return;
+  const k = e.key;
+  if (S.tapping && (k === " " || k === "j" || k === "J")) { e.preventDefault(); if (!e.repeat) tap(); return; }
+  if (S.tapping && k === "Backspace") { e.preventDefault(); untap(); return; }
+  if (k === " " || (S.tapping && (k === "p" || k === "P"))) { e.preventDefault(); audio.paused ? audio.play() : audio.pause(); return; }
+  if (k === "ArrowLeft") { e.preventDefault(); seek(songMs() - 2000); }
+  if (k === "ArrowRight") { e.preventDefault(); seek(songMs() + 2000); }
+  if (k === "[" || k === "]") {
+    const li = currentLineIndex(songMs() + 100);
+    const target = S.song.lines[Math.max(0, Math.min(S.song.lines.length - 1, li + (k === "]" ? 1 : -1)))];
+    if (target) seek(target.time_ms - 300);
+  }
+  if (k === "Escape" && S.tapping) { S.tapping = false; renderRef(); }
+});
+window.addEventListener("resize", draw);
+
+// ---------------------------------------------------------------- start
+(async function init() {
+  S.options = await api("/api/options");
+  renderForm();
+  S.cfg = { ...S.options.builtin, ...S.options.defaults, ...store.get("cfg", {}) };
+  writeForm(S.cfg);
+  $("song").onchange = () => openSong($("song").value);
+  await loadSongs();
+  requestAnimationFrame(frame);
+})().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class="bad" style="padding:10px">${esc(e.message)}</div>`); });
+</script>
+</body>
+</html>

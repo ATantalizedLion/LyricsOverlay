@@ -166,14 +166,17 @@ def tokens_for(romanised: str) -> list[int]:
     return out
 
 
-def syllabify_line(line: str, lang: str | None, romanise) -> list[Syllable]:
+def syllabify_line(line: str, lang: str | None, romanise, tokenize=tokens_for,
+                   words: bool = False) -> list[Syllable]:
     """Split `line` into syllables (texts concatenate back to `line`) with tokens.
 
-    `romanise` turns a piece of text into Latin script (uroman in practice)."""
+    `romanise` turns a piece of text into Latin script (uroman in practice), `tokenize`
+    turns that into the aligner's label indices (MMS labels by default). With `words`,
+    each word-ish unit stays whole."""
     syllables: list[Syllable] = []
     for wi, unit in enumerate(split_units(line)):
-        for piece in split_syllables(unit, lang):
+        for piece in ([unit] if words else split_syllables(unit, lang)):
             core = piece.strip()
             roman = core if core.isascii() else romanise(core)
-            syllables.append(Syllable(piece, tokens_for(roman), wi))
+            syllables.append(Syllable(piece, tokenize(roman), wi))
     return syllables
