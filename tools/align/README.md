@@ -49,7 +49,7 @@ uv run align.py --pending
 ```
 
 Recordings are kept after processing, so you can re-align them later, for example after
-tweaking `--min-confidence` or trying `--demucs-model htdemucs_ft`:
+tuning settings in the sync lab (below):
 
 ```
 uv run align.py --pending --redo                    # re-align every recorded song
@@ -72,12 +72,63 @@ Useful options (`uv run align.py --help` for all):
 | `--words` | Time whole words instead of syllables |
 | `--dry-run` | Print the result as Enhanced LRC instead of writing the cache |
 | `--lrc-out file.lrc` | Also save the result as an Enhanced LRC file |
-| `--demucs-model htdemucs_ft` | Slower, slightly cleaner vocal separation |
+| `--separator htdemucs_ft` | Vocal separation model (see the lab section below) |
+| `--aligner w2v2-large` | Alignment model |
+| `--mode song` | Align the whole song in one pass instead of line by line |
+| `--offset -80` | Shift all syllable times, in ms |
 | `--min-confidence -4.0` | Lower to keep more lines, raise to drop doubtful ones |
 
 **GPU:** the default `torch` from PyPI is CPU-only on Windows. For an NVIDIA GPU, install
 the CUDA build into the tool's environment:
 `uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128 --reinstall`.
+
+## Tuning and comparing models: the sync lab
+
+```
+uv run lab.py
+```
+
+This opens a page in your browser (it runs locally, at http://127.0.0.1:8765) for working
+on one song at a time. It lists the songs the overlay has recorded; to add songs you have
+as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
+
+- **Run** the alignment with any mix of settings from the left panel: vocal separator,
+  aligner, line-by-line or whole-song alignment, syllables or words, window padding,
+  confidence cutoff, time offset. Each run is kept so you can compare it with the others.
+- **Sweep** queues one run per value of a setting, e.g. offsets `-150, -75, 0, 75, 150` or
+  every aligner. The separated vocals and each model's output are cached per song (in
+  `%APPDATA%\LyricsOverlay\align-lab`), so only the first run with a given separator and
+  aligner is slow; changing the other settings re-runs in a second or two.
+- **Compare** the ticked runs while the song plays: each gets a lane on the timeline
+  under the waveform, and a karaoke line that fills in the way the overlay would. You can
+  listen to the full mix or to the separated vocals, at slower speeds too. The lines
+  table shows each run's confidence per line, so you can see where models disagree.
+- **Score** runs by tapping along to a few lines (Reference timing: press Space at the
+  start of each word). Every run then gets its median error against your taps, its bias
+  (consistently early or late, which an offset fixes) and the share of words within 100 ms.
+- **Use in overlay** writes a run's timing into the overlay's lyrics cache.
+  **Use as default** saves the current settings for `align.py --pending`, so once you've
+  found settings you like, batch-processing uses them.
+
+The models you can choose from:
+
+| Separator | |
+|---|---|
+| `htdemucs` | Demucs v4, the default |
+| `htdemucs_ft` | Demucs v4 fine-tuned: about 4x slower, slightly cleaner |
+| `mdx_extra` | Demucs v3 |
+| `uvr:…` | UVR's BS-Roformer and MDX-Net vocal models. Optional extra: start the lab with `uv run --group uvr lab.py` |
+| `none` | No separation, align on the full mix |
+
+| Aligner | |
+|---|---|
+| `mms` | Meta's MMS forced aligner, multilingual (lyrics are romanised first). The default |
+| `w2v2-base` | wav2vec2 base 960h, English only, smaller |
+| `w2v2-large` | wav2vec2 large 960h, English only, slower |
+| `even` | No model: spreads each line evenly over its syllables. A baseline to beat |
+
+The same settings work on the command line, e.g.
+`uv run align.py --pending --redo --aligner w2v2-large --mode song --offset -80`.
 
 ## Accuracy
 

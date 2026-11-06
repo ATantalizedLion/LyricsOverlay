@@ -178,3 +178,12 @@ def test_recording_problem(tmp_path):
     assert "not this song's audio" in recording_problem(tmp_path)
     sf.write(tmp_path / "recording.wav", np.zeros((sr * 60, 2), dtype=np.int16), sr, subtype="PCM_16")
     assert "silent" in recording_problem(tmp_path)
+
+
+def test_forced_align_long_lines():
+    # Backtracking used to mix Python ints with int8 backpointers, which overflows on
+    # NumPy 2 once a line has more than ~63 letters.
+    text = "abcdefghijklmnopqrstuvwxyz" * 4
+    lp = fake_log_probs([c for ch in text for c in (ch, "-")])
+    spans, _ = forced_align(lp, [MMS_LABELS.index(c) if c in MMS_LABELS else 1 for c in text])
+    assert spans[-1] == (2 * len(text) - 2, 2 * len(text) - 2)
