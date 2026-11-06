@@ -239,3 +239,41 @@ def test_chunked_emissions_line_up_with_the_audio():
     assert em.shape[1] == len(MMS_LABELS) + 1
     blank_frames = labels[:100] == 0
     assert (em[blank_frames, -1] < -5).all() and (em[~blank_frames, -1] > -0.01).all()
+
+
+def test_lab_deletes_all_recordings(lab_server):
+    import os
+
+    base, entry = lab_server
+    root = entry.parent
+    sid = urllib.request.quote(entry.name)
+    call(f"{base}/api/song/{sid}/runs", "POST", {"configs": [{"unit": "word"}]})
+    for _ in range(100):
+        state = json.loads(call(f"{base}/api/jobs?song={sid}")[2])
+        if state and all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    run_id = json.loads(call(f"{base}/api/song/{sid}")[2])["runs"][0]["id"]
+    call(f"{base}/api/song/{sid}/apply", "POST", {"run_id": run_id})
+    (entry / "recording.json").write_text('{"offset_ms": 0}')
+    other = root / "Other-Song-100.000"
+    other.mkdir()
+    (other / ".align-attempted").touch()
+    old_part, new_part = root / ".recording-1.wav.part", root / ".recording-2.wav.part"
+    old_part.write_bytes(b"x")
+    new_part.write_bytes(b"x")
+    os.utime(old_part, (time.time() - 3600, time.time() - 3600))
+
+    overview = json.loads(call(f"{base}/api/recordings")[2])
+    assert {k: v for k, v in overview.items() if k != "mb"} == {"recordings": 1, "leftovers": 1, "aligned": 1, "markers": 1}
+
+    result = json.loads(call(f"{base}/api/recordings/delete", "POST", {"clear_timing": True})[2])
+    assert result == {"recordings": 1, "leftovers": 1, "cleared": 1, "markers": 1}
+    assert not (entry / "recording.wav").exists() and not (entry / "recording.json").exists()
+    assert not (other / ".align-attempted").exists()
+    assert not old_part.exists() and new_part.exists()  # might still be recording
+    assert "segments" not in json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]
+    from align import lab_dir
+    assert not (lab_dir(entry) / "vocals").exists()
+    assert (lab_dir(entry) / "runs" / f"{run_id}.json").exists()
+    assert json.loads(call(f"{base}/api/songs")[2]) == []

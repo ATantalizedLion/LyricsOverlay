@@ -87,6 +87,7 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
   <h1>Sync lab</h1>
   <select id="song"></select>
   <span id="songInfo"></span>
+  <button id="delRecBtn" style="margin-left:auto" title="Delete every song the overlay recorded from Spotify">Delete all recordings…</button>
 </header>
 <main>
   <aside>
@@ -486,6 +487,26 @@ $("defaultsBtn").onclick = async () => {
   await api("/api/defaults", { method: "POST", body: S.cfg });
   S.options.defaults = { ...S.cfg };
   $("defaultsBtn").textContent = "Saved ✓"; setTimeout(() => ($("defaultsBtn").textContent = "Use as default"), 1500);
+};
+$("delRecBtn").onclick = async () => {
+  try {
+    const o = await api("/api/recordings");
+    if (!o.recordings && !o.leftovers && !o.markers) { alert("There are no recordings to delete."); return; }
+    if (!confirm(`Delete ${o.recordings} recording${o.recordings === 1 ? "" : "s"}` +
+      (o.leftovers ? ` and ${o.leftovers} unfinished one${o.leftovers === 1 ? "" : "s"}` : "") +
+      ` (${o.mb} MB)? This also deletes the separated vocals the lab made from them. ` +
+      `Runs you made stay, but those songs leave the song list until they're recorded again. This can't be undone.`)) return;
+    let clear = false;
+    if (o.aligned) clear = confirm(`${o.aligned} of these songs have syllable timing in the overlay. ` +
+      `Remove that timing too, so the overlay records them again?\n\nOK: remove it. Cancel: keep it.`);
+    const r = await api("/api/recordings/delete", { method: "POST", body: { clear_timing: clear } });
+    alert(`Deleted ${r.recordings + r.leftovers} recording${r.recordings + r.leftovers === 1 ? "" : "s"}` +
+      (r.cleared ? ` and removed syllable timing from ${r.cleared} song${r.cleared === 1 ? "" : "s"}` : "") +
+      `. Songs you play from now on are recorded fresh (with recording turned on in the overlay).`);
+    audio.pause(); audio.removeAttribute("src");
+    S.song = null; await loadSongs();
+    if (!S.song) openSong("");
+  } catch (e) { alert(e.message); }
 };
 $("resetBtn").onclick = () => { S.cfg = { ...S.options.builtin }; writeForm(S.cfg); store.set("cfg", S.cfg); };
 

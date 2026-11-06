@@ -109,6 +109,10 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
 - **Use in overlay** writes a run's timing into the overlay's lyrics cache.
   **Use as default** saves the current settings for `align.py --pending`, so once you've
   found settings you like, batch-processing uses them.
+- **Delete all recordings…** (top right) removes every recording the overlay made, plus
+  the lab's vocals made from them and the "already tried" markers, so those songs get
+  recorded again. It can also take out the syllable timing made from them, since the
+  overlay doesn't record songs that already have it.
 
 The models you can choose from:
 

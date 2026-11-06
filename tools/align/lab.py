@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from align import (RECORDING_FILE, cache_root, data_dir, find_cache_entry, lab_dir, original_lines,
+from align import (ATTEMPTED_MARKER, RECORDING_FILE, cache_root, data_dir, find_cache_entry, lab_dir, original_lines,
                    read_tags, recording_offset_ms, recording_problem, write_cache_lines)
 from pipeline import (ALIGNERS, SEPARATORS, ModelPool, RunConfig, defaults_file, load_defaults,
                       run_alignment, vocals_cache_path)
@@ -151,6 +151,65 @@ def song_detail(name: str) -> dict:
         "applied": read_json(lab / "applied.json"),
         "vocals": vocals,
     }
+
+
+# ---------------------------------------------------------------------------
+# Removing recordings
+
+# In-progress recordings live in the cache root until the song ends; leave recent ones
+# alone in case the overlay is recording right now.
+PARTIAL_MIN_AGE_S = 15 * 60
+
+
+def _recording_files() -> tuple[list[Path], list[Path]]:
+    """(cache entries with a recording, leftover in-progress files)."""
+    root = cache_root()
+    entries = sorted(rec.parent for rec in root.glob(f"*/{RECORDING_FILE}"))
+    now = time.time()
+    partials = [p for p in root.glob(".recording*.wav.part")
+                if now - p.stat().st_mtime > PARTIAL_MIN_AGE_S]
+    return entries, partials
+
+
+def recordings_overview() -> dict:
+    entries, partials = _recording_files()
+    size = sum((e / RECORDING_FILE).stat().st_size for e in entries) + sum(p.stat().st_size for p in partials)
+    aligned = 0
+    for e in entries:
+        lines = read_json(e / "lyrics.lrc", {}).get("synced_lyrics") or []
+        aligned += any(l.get("segments") for l in lines)
+    return {"recordings": len(entries), "leftovers": len(partials), "mb": round(size / 1e6),
+            "aligned": aligned, "markers": len(list(cache_root().glob(f"*/{ATTEMPTED_MARKER}")))}
+
+
+def delete_recordings(clear_timing: bool) -> dict:
+    """Deletes every recording the overlay made, the lab's vocals and model output made from
+    them, and the "already tried" markers, so the overlay records those songs again.
+    With `clear_timing`, also takes the syllable timing made from them out of the cache
+    (otherwise the overlay won't record songs that already have it)."""
+    import shutil
+
+    entries, partials = _recording_files()
+    cleared = 0
+    for entry in entries:
+        for name in (RECORDING_FILE, "recording.json"):
+            (entry / name).unlink(missing_ok=True)
+        lab = lab_dir(entry)
+        if not (lab / "source.json").exists():  # vocals came from the recording
+            for sub in ("vocals", "emissions"):
+                shutil.rmtree(lab / sub, ignore_errors=True)
+        if clear_timing:
+            current = read_json(entry / "lyrics.lrc", {}).get("synced_lyrics") or []
+            if any(l.get("segments") for l in current):
+                write_cache_lines(entry, original_lines(entry))
+                (lab / "applied.json").unlink(missing_ok=True)
+                cleared += 1
+    for p in partials:
+        p.unlink(missing_ok=True)
+    markers = list(cache_root().glob(f"*/{ATTEMPTED_MARKER}"))
+    for m in markers:
+        m.unlink(missing_ok=True)
+    return {"recordings": len(entries), "leftovers": len(partials), "cleared": cleared, "markers": len(markers)}
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +391,8 @@ class Handler(BaseHTTPRequestHandler):
                 "defaults": load_defaults(data_dir()).to_dict(), "builtin": RunConfig().to_dict(),
                 "cache_root": str(cache_root()),
             })
+        elif parts == ["api", "recordings"]:
+            self._json(recordings_overview())
         elif parts == ["api", "songs"]:
             self._json(list_songs())
         elif len(parts) == 3 and parts[:2] == ["api", "song"]:
@@ -350,6 +411,9 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self):
         parts, _ = self._route()
         body = self._body()
+        if parts == ["api", "recordings", "delete"]:
+            self._json(delete_recordings(bool(body.get("clear_timing"))))
+            return
         if parts == ["api", "defaults"]:
             cfg = RunConfig.from_dict(body)
             write_json(defaults_file(data_dir()), cfg.to_dict())
