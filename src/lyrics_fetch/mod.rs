@@ -1,6 +1,10 @@
 //! Module for fetching (cached) lyrics files for songs
 
-use std::{fmt::Display, sync::Arc};
+use std::{
+    fmt::Display,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use tracing::{debug, error, warn};
 
@@ -15,6 +19,7 @@ use crate::{
     lyrics_parser::{SongLyrics, parse_lrc},
     translation::Translation,
     now_playing::NowPlaying,
+    paths,
     runtime::{Messages, RuntimeError},
     settings::Settings,
 };
@@ -101,13 +106,51 @@ impl LyricsRequestInfo {
     }
 
     pub fn get_track_identifier(&self) -> String {
+        format!("{}{}s", self.identifier_prefix(), self.duration_sec)
+    }
+
+    /// Everything in the identifier except the duration.
+    fn identifier_prefix(&self) -> String {
         format!(
-            "{}-{} ({}) {}s",
-            self.artist_name.clone(),
-            self.track_name.clone(),
-            self.album_name.clone(),
-            self.duration_sec.clone()
+            "{}-{} ({}) ",
+            self.artist_name, self.track_name, self.album_name
         )
+    }
+
+    /// The track's cache folder under `cache_root`. The duration Windows reports for the
+    /// same song can differ by a millisecond or so between plays (e.g. 213.906s vs
+    /// 213.907s), so if a folder for this track with a duration within a couple of
+    /// seconds already exists, this adopts that folder's duration. That keeps the lyrics,
+    /// translations and recordings of one song in a single folder.
+    pub fn match_existing_cache_entry(&mut self, cache_root: &Path) {
+        const MAX_DURATION_DIFF_SEC: f64 = 2.0;
+        if cache_root.join(self.get_track_identifier()).exists() {
+            return;
+        }
+        let prefix = self.identifier_prefix();
+        let Ok(entries) = std::fs::read_dir(cache_root) else {
+            return;
+        };
+        let closest = entries
+            .filter_map(Result::ok)
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let duration: f64 = name.strip_prefix(&prefix)?.strip_suffix('s')?.parse().ok()?;
+                Some(duration)
+            })
+            .filter(|d| (d - self.duration_sec).abs() <= MAX_DURATION_DIFF_SEC)
+            .min_by(|a, b| {
+                (a - self.duration_sec)
+                    .abs()
+                    .total_cmp(&(b - self.duration_sec).abs())
+            });
+        if let Some(duration) = closest {
+            self.duration_sec = duration;
+        }
+    }
+
+    pub fn cache_dir(&self, cache_root: &Path) -> PathBuf {
+        cache_root.join(self.get_track_identifier())
     }
 }
 
@@ -124,8 +167,10 @@ impl LyricsFetcher {
         }
     }
 
-    pub async fn get_lyrics(&self, req: LyricsRequestInfo) -> Result<Messages, RuntimeError> {
+    pub async fn get_lyrics(&self, mut req: LyricsRequestInfo) -> Result<Messages, RuntimeError> {
         if self.settings.read().await.caching_enabled {
+            let cache_root = paths::resolve(&self.settings.read().await.cache_folder);
+            req.match_existing_cache_entry(&cache_root);
             let cache_res = self.check_cache(&req).await;
             match cache_res {
                 Ok(lyrics) => {

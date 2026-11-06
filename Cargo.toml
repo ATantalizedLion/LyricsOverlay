@@ -29,8 +29,15 @@ egui = "0.33.3"
 eframe = { version = "0.33.3", features = ["wgpu"] }
 hmac = "0.12.1"
 sha1 = "0.10.6"
-windows = { version = "0.62", features = ["Media_Control", "Foundation"] }
+windows = { version = "0.62", features = [
+    "Media_Control",
+    "Foundation",
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
 whatlang = "0.18.0"
+wasapi = "0.26.0"
+hound = "3.5.1"
 
 # TODO: Remove this patch (and vendor/egui-winit-0.33.3) once emilk/egui#8116 lands in a
 # released eframe/egui-winit version. Upstream doesn't set WS_EX_NOREDIRECTIONBITMAP for
