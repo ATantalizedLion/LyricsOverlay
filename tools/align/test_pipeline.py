@@ -277,3 +277,30 @@ def test_lab_deletes_all_recordings(lab_server):
     assert not (lab_dir(entry) / "vocals").exists()
     assert (lab_dir(entry) / "runs" / f"{run_id}.json").exists()
     assert json.loads(call(f"{base}/api/songs")[2]) == []
+
+
+def test_lab_batches(lab_server, tmp_path):
+    base, entry = lab_server
+    second = entry.parent / "Test-Other-11.000"
+    second.mkdir()
+    for name in (".meta", "lyrics.lrc", "recording.wav"):
+        (second / name).write_bytes((entry / name).read_bytes())
+    _, _, body = call(f"{base}/api/batch", "POST", {"config": {"unit": "word", "offset_ms": 400}, "label": "late"})
+    batch = json.loads(body)["batch"]
+    for _ in range(200):
+        state = json.loads(call(f"{base}/api/jobs")[2])
+        if state and all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    assert [j["status"] for j in state] == ["done", "done"], state
+    lib = json.loads(call(f"{base}/api/library")[2])
+    runs = [r for s in lib["songs"] for r in s["run_list"]]
+    assert len(runs) == 2 and {r["batch"] for r in runs} == {batch}
+    assert all(r["stats"]["lrc_shift_ms"] == 400 and r["stats"]["lrc_shift_spread_ms"] == 0 for r in runs)
+    assert "lines" not in runs[0]
+
+    assert json.loads(call(f"{base}/api/batch/apply", "POST", {"batch": batch})[2]) == {"applied": 2}
+    for e in (entry, second):
+        assert json.loads((e / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"][0]["start_ms"] == 1400
+    assert json.loads(call(f"{base}/api/batch/delete", "POST", {"batch": batch})[2]) == {"deleted": 2}
+    assert not any(s["run_list"] for s in json.loads(call(f"{base}/api/library")[2])["songs"])

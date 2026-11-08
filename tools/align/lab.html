@@ -111,7 +111,18 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
     <div id="jobs" class="jobs"><div class="muted">Nothing queued.</div></div>
   </aside>
   <section class="main" id="mainSection">
-    <div class="empty" id="noSong">Pick a song at the top. Songs show up here once the overlay has recorded them, or when you start the lab with your own audio files.</div>
+    <div id="noSong">
+      <h2>Library</h2>
+      <div class="help">Run the settings on the left on every recorded song, then compare the batches. Confidence is only comparable between runs that use the same aligner. Shift is where singing starts compared with the LRC line times; a large, steady shift points at a recording that started at the wrong moment, and an offset fixes it.</div>
+      <div class="row" style="margin:6px 0 10px">
+        <input type="text" id="batchLabel" placeholder="batch name (optional)" style="width:220px">
+        <button class="primary" id="batchBtn">Run on all songs</button>
+        <span class="muted" id="batchInfo"></span>
+      </div>
+      <div class="tablewrap"><table id="batches"></table></div>
+      <h2>Songs</h2>
+      <div class="tablewrap"><table id="libSongs"></table></div>
+    </div>
     <div id="songView" hidden>
       <div class="transport">
         <button id="playBtn" class="primary" style="min-width:70px">Play</button>
@@ -272,13 +283,18 @@ function parseSweepValue(fd, raw) {
 async function loadSongs() {
   S.songs = await api("/api/songs");
   const sel = $("song");
-  sel.innerHTML = `<option value="">${S.songs.length ? "Choose a song…" : "No recorded songs yet"}</option>` +
+  sel.innerHTML = `<option value="">${S.songs.length ? `Library: all ${S.songs.length} songs` : "No recorded songs yet"}</option>` +
     S.songs.map((s) => `<option value="${esc(s.id)}">${esc(s.artist)} – ${esc(s.title)}${s.runs ? `  (${s.runs} runs)` : ""}</option>`).join("");
   const last = store.get("song", "");
   if (S.songs.some((s) => s.id === last)) { sel.value = last; await openSong(last); }
+  else await openSong("");
 }
 async function openSong(id, keepView = false) {
-  if (!id) { S.song = null; $("songView").hidden = true; $("noSong").hidden = false; return; }
+  if (!id) {
+    S.song = null; store.set("song", ""); audio.pause();
+    $("songView").hidden = true; $("noSong").hidden = false; $("songInfo").textContent = "";
+    await loadLibrary(); return;
+  }
   store.set("song", id);
   const song = await api(`/api/song/${enc(id)}`);
   const changed = !S.song || S.song.id !== id;
@@ -360,6 +376,12 @@ function scoreRun(run) {
     timed: errs.length / refCount,
   };
 }
+function fmtShift(st) {
+  if (st.lrc_shift_ms == null) return "–";
+  const v = st.lrc_shift_ms, sp = st.lrc_shift_spread_ms;
+  const cls = Math.abs(v) > 300 && sp < Math.abs(v) / 2 ? "warn" : "";
+  return `<span class="${cls}">${v > 0 ? "+" : ""}${v} ms</span><span class="muted"> ±${sp}</span>`;
+}
 function renderRuns() {
   const t = $("runs");
   const runs = S.song.runs;
@@ -367,7 +389,7 @@ function renderRuns() {
   const scores = Object.fromEntries(runs.map((r) => [r.id, scoreRun(r)]));
   const bestMedian = Math.min(...Object.values(scores).filter((s) => s && s.median != null).map((s) => s.median));
   const applied = S.song.applied?.run_id;
-  t.innerHTML = `<tr><th></th><th>Run</th><th>Settings</th><th class="num">Lines timed</th><th class="num">Confidence</th>
+  t.innerHTML = `<tr><th></th><th>Run</th><th>Settings</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num" title="Where lines start being sung relative to the LRC line times (median, ± spread). A big shift with a small spread means the whole song is off.">Shift</th>
     <th class="num">Error</th><th class="num">Bias</th><th class="num">±100</th><th class="num">Timed</th><th class="num">Took</th><th></th></tr>` +
     runs.slice().reverse().map((r) => {
       const sc = scores[r.id], st = r.stats, c = r.config;
@@ -380,6 +402,7 @@ function renderRuns() {
         <td class="muted" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
         <td class="num">${st.aligned}/${st.lines}</td>
         <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}</td>
+        <td class="num">${fmtShift(st)}</td>
         <td class="num ${sc && sc.median === bestMedian ? "good" : ""}">${sc && sc.median != null ? Math.round(sc.median) + " ms" : "–"}</td>
         <td class="num">${sc && sc.bias != null ? (sc.bias > 0 ? "+" : "") + Math.round(sc.bias) + " ms" : "–"}</td>
         <td class="num">${sc ? Math.round(sc.within * 100) + "%" : "–"}</td>
@@ -389,7 +412,7 @@ function renderRuns() {
             <button data-act="apply" title="Write this run's timing into the overlay's lyrics cache">Use in overlay</button>
             <button data-act="del" title="Delete run">✕</button></td></tr>`;
     }).join("") +
-    (applied ? `<tr><td colspan="11" class="muted">The overlay is using “${esc(S.song.applied.label || applied)}”. <button data-act="unapply">Back to line timing</button></td></tr>` : "");
+    (applied ? `<tr><td colspan="12" class="muted">The overlay is using “${esc(S.song.applied.label || applied)}”. <button data-act="unapply">Back to line timing</button></td></tr>` : "");
 }
 $("runs").addEventListener("click", async (e) => {
   const act = e.target.dataset.act; if (!act) return;
@@ -438,11 +461,100 @@ $("linesTable").addEventListener("click", (e) => {
   if (S.tapping) { S.cursor = { line: i, unit: 0 }; renderRef(); }
 });
 
+// ---------------------------------------------------------------- library
+async function loadLibrary() {
+  S.lib = await api("/api/library");
+  renderLibrary();
+  pollJobs();
+}
+function batchesOf(lib) {
+  const by = new Map();
+  for (const song of lib.songs) for (const r of song.run_list) {
+    if (!r.batch) continue;
+    if (!by.has(r.batch)) by.set(r.batch, { id: r.batch, label: r.label, config: r.config, created: r.created, runs: [] });
+    by.get(r.batch).runs.push({ song: song.id, run: r });
+  }
+  const median = (a) => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+  return [...by.values()].map((b) => {
+    const lines = b.runs.reduce((a, x) => a + x.run.stats.lines, 0), aligned = b.runs.reduce((a, x) => a + x.run.stats.aligned, 0);
+    const confs = b.runs.map((x) => x.run.stats.mean_confidence).filter((v) => v != null);
+    const shifts = b.runs.map((x) => x.run.stats.lrc_shift_ms).filter((v) => v != null);
+    return { ...b, songs: b.runs.length, timed: lines ? aligned / lines : 0,
+      conf: confs.length ? confs.reduce((a, c) => a + c, 0) / confs.length : null,
+      shift: median(shifts), absShift: median(shifts.map(Math.abs)),
+      offSongs: b.runs.filter((x) => Math.abs(x.run.stats.lrc_shift_ms ?? 0) > 300 && (x.run.stats.lrc_shift_spread_ms ?? 1e9) < Math.abs(x.run.stats.lrc_shift_ms) / 2).length };
+  }).sort((a, b) => b.created - a.created);
+}
+function renderLibrary() {
+  const lib = S.lib; if (!lib) return;
+  const batches = batchesOf(lib);
+  const pending = S.jobs.filter((j) => j.batch && (j.status === "queued" || j.status === "running")).length;
+  $("batchInfo").textContent = pending ? `${pending} song${pending === 1 ? "" : "s"} still to process…` : `${lib.songs.length} songs`;
+  const best = Math.max(...batches.map((b) => b.timed));
+  $("batches").innerHTML = batches.length ? `<tr><th>Batch</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
+    batches.map((b) => `<tr data-batch="${b.id}"><td>${esc(b.label)}</td><td class="muted">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
+      <td class="num">${b.songs}</td><td class="num ${b.timed === best ? "good" : ""}">${Math.round(b.timed * 100)}%</td>
+      <td class="num">${b.conf == null ? "–" : b.conf.toFixed(2)}</td>
+      <td class="num">${b.shift == null ? "–" : (b.shift > 0 ? "+" : "") + b.shift + " ms"}<span class="muted"> (|${b.absShift ?? "–"}|)</span></td>
+      <td class="num ${b.offSongs ? "warn" : ""}">${b.offSongs}</td>
+      <td><button data-act="settings">Settings</button> <button data-act="apply" title="Write this batch's timing into the overlay for every song in it">Use for all</button> <button data-act="del">✕</button></td></tr>`).join("")
+    : `<tr><td class="muted" style="padding:14px">No batches yet. Pick settings on the left and press “Run on all songs”.</td></tr>`;
+  const shown = batches.slice(0, 5);
+  $("libSongs").innerHTML = `<tr><th>Song</th><th>In overlay</th>${shown.map((b) => `<th class="num" title="${esc(b.label)}">${esc(b.label.slice(0, 18))}</th>`).join("")}</tr>` +
+    lib.songs.map((song) => {
+      const cells = shown.map((b) => {
+        const x = b.runs.find((r) => r.song === song.id); if (!x) return `<td class="num muted">–</td>`;
+        const st = x.run.stats;
+        return `<td class="num" title="confidence ${st.mean_confidence ?? "–"}, shift ${st.lrc_shift_ms ?? "–"} ms">${st.aligned}/${st.lines} · ${fmtShift(st)}</td>`;
+      }).join("");
+      return `<tr data-song="${esc(song.id)}" style="cursor:pointer"><td>${esc(song.artist)} – ${esc(song.title)}</td>
+        <td class="muted">${song.applied ? esc(song.applied.label || "a run") : song.aligned_in_overlay ? "syllables (from align.py)" : "lines only"}</td>${cells}</tr>`;
+    }).join("");
+}
+$("batches").addEventListener("click", async (e) => {
+  const act = e.target.dataset.act; if (!act) return;
+  const id = e.target.closest("tr").dataset.batch;
+  const b = batchesOf(S.lib).find((x) => x.id === id);
+  if (act === "settings") { S.cfg = { ...S.options.builtin, ...b.config }; writeForm(S.cfg); store.set("cfg", S.cfg); }
+  if (act === "apply") {
+    if (!confirm(`Use “${b.label}” in the overlay for all ${b.songs} songs? Each song's lyrics keep a backup of their original timing.`)) return;
+    const r = await api("/api/batch/apply", { method: "POST", body: { batch: id } });
+    alert(`The overlay now uses “${b.label}” for ${r.applied} songs. It shows up the next time each song starts.`);
+    await loadLibrary();
+  }
+  if (act === "del") {
+    if (!confirm(`Delete batch “${b.label}” (${b.songs} runs)?`)) return;
+    await api("/api/batch/delete", { method: "POST", body: { batch: id } });
+    await loadLibrary();
+  }
+});
+$("libSongs").addEventListener("click", (e) => {
+  const tr = e.target.closest("tr[data-song]"); if (!tr) return;
+  $("song").value = tr.dataset.song; openSong(tr.dataset.song);
+});
+$("batchBtn").onclick = async () => {
+  if (!S.songs.length) { alert("There are no recorded songs yet."); return; }
+  const r = await api("/api/batch", { method: "POST", body: { config: S.cfg, label: $("batchLabel").value.trim() } });
+  $("batchLabel").value = "";
+  S.jobs = await api("/api/jobs"); renderJobs(); renderLibrary();
+  pollTimer = setTimeout(pollJobs, 1000);
+  return r;
+};
+
 // ---------------------------------------------------------------- jobs
 let pollTimer = null;
 async function pollJobs() {
   clearTimeout(pollTimer);
-  if (!S.song) return;
+  if (!S.song) {
+    const jobs = await api("/api/jobs").catch(() => []);
+    const before = new Set(S.jobs.filter((j) => j.status === "done" || j.status === "error").map((j) => j.id));
+    const changed = jobs.some((j) => (j.status === "done" || j.status === "error") && !before.has(j.id));
+    S.jobs = jobs; renderJobs();
+    if (changed && S.lib) S.lib = await api("/api/library");
+    renderLibrary();
+    if (jobs.some((j) => j.status === "queued" || j.status === "running")) pollTimer = setTimeout(pollJobs, 1500);
+    return;
+  }
   const jobs = await api(`/api/jobs?song=${enc(S.song.id)}`).catch(() => []);
   const prevDone = new Set(S.jobs.filter((j) => j.status === "done").map((j) => j.id));
   const finished = jobs.filter((j) => j.status === "done" && !prevDone.has(j.id) && S.jobs.some((p) => p.id === j.id));
@@ -461,7 +573,7 @@ function renderJobs() {
   const jobs = S.jobs.slice().reverse().slice(0, 8);
   if (!jobs.length) { el.innerHTML = `<div class="muted">Nothing queued.</div>`; return; }
   const active = S.jobs.find((j) => j.status === "running") || jobs[0];
-  el.innerHTML = jobs.map((j) => `<div class="job"><span class="st ${j.status === "error" ? "bad" : j.status === "done" ? "good" : "warn"}">${j.status}</span> ${esc(j.label || summary(j.config))}${j.error ? `<div class="bad">${esc(j.error)}</div>` : ""}</div>`).join("") +
+  el.innerHTML = jobs.map((j) => `<div class="job"><span class="st ${j.status === "error" ? "bad" : j.status === "done" ? "good" : "warn"}">${j.status}</span> ${esc(j.label || summary(j.config))}${S.song ? "" : ` <span class="muted">· ${esc(j.song)}</span>`}${j.error ? `<div class="bad">${esc(j.error)}</div>` : ""}</div>`).join("") +
     `<pre class="log" id="joblog">${esc(active.log.join("\n"))}</pre>`;
   const log = $("joblog"); log.scrollTop = log.scrollHeight;
 }

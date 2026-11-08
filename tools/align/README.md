@@ -78,9 +78,9 @@ Useful options (`uv run align.py --help` for all):
 | `--offset -80` | Shift all syllable times, in ms |
 | `--min-confidence -4.0` | Lower to keep more lines, raise to drop doubtful ones |
 
-**GPU:** the default `torch` from PyPI is CPU-only on Windows. For an NVIDIA GPU, install
-the CUDA build into the tool's environment:
-`uv pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128 --reinstall`.
+**GPU:** on Windows the tool installs PyTorch's CUDA build, so it uses an NVIDIA GPU when
+there is one (seconds per song instead of minutes). Both tools print the device they use
+(`device cuda` or `device cpu`).
 
 ## Tuning and comparing models: the sync lab
 

@@ -23,3 +23,15 @@ uvr = ["audio-separator[cpu]>=0.30"]
 
 [tool.uv]
 package = false
+
+# On Windows, PyPI only has CPU builds of PyTorch. Take the CUDA 12.8 builds from PyTorch's
+# own index instead: they run on NVIDIA GPUs (RTX 20-series and newer) and fall back to the
+# CPU everywhere else. Linux's PyPI builds already include CUDA; macOS has no CUDA.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu128", marker = "sys_platform == 'win32'" }]

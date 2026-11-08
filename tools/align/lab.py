@@ -213,6 +213,50 @@ def delete_recordings(clear_timing: bool) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Library: the same settings on every song
+
+
+def library() -> dict:
+    """Every song with its runs (without per-line detail), for comparing settings batches
+    across the whole library."""
+    songs = []
+    for song in list_songs():
+        entry = cache_root() / song["id"]
+        lab = lab_dir(entry)
+        runs = []
+        for f in sorted((lab / "runs").glob("*.json")) if (lab / "runs").exists() else []:
+            run = read_json(f)
+            if run:
+                runs.append(run_summary(run))
+        song["run_list"] = sorted(runs, key=lambda r: r.get("created", 0))
+        song["applied"] = read_json(lab / "applied.json")
+        songs.append(song)
+    return {"songs": songs}
+
+
+def batch_runs(batch: str) -> list[tuple[Path, Path, dict]]:
+    """(entry, run file, run) for each song's run in `batch`."""
+    out = []
+    for f in (data_dir() / "align-lab").glob("*/runs/*.json"):
+        run = read_json(f)
+        if run and run.get("batch") == batch:
+            entry = cache_root() / f.parent.parent.name
+            if (entry / "lyrics.lrc").exists():
+                out.append((entry, f, run))
+    return out
+
+
+def apply_batch(batch: str) -> int:
+    applied = 0
+    for entry, _, run in batch_runs(batch):
+        write_cache_lines(entry, run["lines"])
+        write_json(lab_dir(entry) / "applied.json",
+                   {"run_id": run["id"], "label": run.get("label"), "at": time.time()})
+        applied += 1
+    return applied
+
+
+# ---------------------------------------------------------------------------
 # Background jobs (one at a time, so models are loaded once and shared)
 
 
@@ -225,9 +269,9 @@ class Jobs:
         self.lock = threading.Lock()
         threading.Thread(target=self._work, daemon=True).start()
 
-    def submit(self, song: str, cfg: RunConfig, label: str) -> dict:
+    def submit(self, song: str, cfg: RunConfig, label: str, batch: str | None = None) -> dict:
         job = {"id": secrets.token_hex(4), "song": song, "config": cfg.to_dict(), "label": label,
-               "status": "queued", "log": [], "run_id": None, "error": None, "created": time.time()}
+               "batch": batch, "status": "queued", "log": [], "run_id": None, "error": None, "created": time.time()}
         with self.lock:
             self.jobs[job["id"]] = job
         self.queue.put(job["id"])
@@ -269,7 +313,8 @@ class Jobs:
                                duration_ms=int(float(meta.get("duration_sec", 0)) * 1000) or None,
                                log=log)
         run_id = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
-        result.update(id=run_id, label=job["label"] or cfg.summary(), created=time.time())
+        result.update(id=run_id, label=job["label"] or cfg.summary(), created=time.time(),
+                      batch=job.get("batch"))
         write_json(lab_dir(entry) / "runs" / f"{run_id}.json", result)
         return run_id
 
@@ -393,6 +438,8 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif parts == ["api", "recordings"]:
             self._json(recordings_overview())
+        elif parts == ["api", "library"]:
+            self._json(library())
         elif parts == ["api", "songs"]:
             self._json(list_songs())
         elif len(parts) == 3 and parts[:2] == ["api", "song"]:
@@ -413,6 +460,23 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if parts == ["api", "recordings", "delete"]:
             self._json(delete_recordings(bool(body.get("clear_timing"))))
+            return
+        if parts == ["api", "batch"]:
+            cfg = RunConfig.from_dict(body.get("config") or {})
+            batch = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
+            label = str(body.get("label") or cfg.summary())[:120]
+            songs = [s["id"] for s in list_songs()]
+            jobs = [self.jobs.submit(song, cfg, label, batch) for song in songs]
+            self._json({"batch": batch, "jobs": len(jobs)})
+            return
+        if parts == ["api", "batch", "apply"]:
+            self._json({"applied": apply_batch(str(body.get("batch")))})
+            return
+        if parts == ["api", "batch", "delete"]:
+            runs = batch_runs(str(body.get("batch")))
+            for _, f, _ in runs:
+                f.unlink(missing_ok=True)
+            self._json({"deleted": len(runs)})
             return
         if parts == ["api", "defaults"]:
             cfg = RunConfig.from_dict(body)

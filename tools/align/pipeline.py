@@ -652,17 +652,34 @@ def run_alignment(lines: list[dict], audio: Path | None, audio_offset_ms: int, c
 
     confs = [l["confidence"] for l in out_lines if l["confidence"] is not None and l["status"] == "ok"]
     sung = [l for l in out_lines if l["status"] != "empty"]
+    shift, spread = lrc_shift([l for l in sung if l["status"] == "ok"])
     stats = {
         "lines": len(sung),
         "aligned": sum(l["status"] == "ok" for l in sung),
         "low": sum(l["status"] == "low" for l in sung),
         "failed": sum(l["status"] == "failed" for l in sung),
         "mean_confidence": round(float(np.mean(confs)), 3) if confs else None,
+        "lrc_shift_ms": shift,
+        "lrc_shift_spread_ms": spread,
         **timings,
         "total_s": round(time.time() - t_start, 1),
     }
     log(f"Aligned {stats['aligned']} of {stats['lines']} lines in {stats['total_s']}s.")
     return {"config": cfg.to_dict(), "lang": lang, "lines": out_lines, "stats": stats}
+
+
+def lrc_shift(lines: list[dict]) -> tuple[int | None, int | None]:
+    """How far the first sung syllable of each line sits from the LRC line time: the median
+    (positive = singing starts after the LRC time) and the median distance from that.
+
+    LRC times usually sit on or just before the start of singing, so a large, consistent
+    shift (small spread) means the whole song is off, typically because the recording's
+    start position was misjudged; a large spread means the lines disagree."""
+    d = [l["segments"][0]["start_ms"] - l["orig_time_ms"] for l in lines if l.get("segments")]
+    if len(d) < 3:
+        return None, None
+    med = float(np.median(d))
+    return int(round(med)), int(round(float(np.median(np.abs(np.array(d) - med)))))
 
 
 def fmt_ms(ms: int) -> str:
