@@ -328,3 +328,26 @@ def test_auto_shift_leaves_small_or_inconsistent_shifts_alone():
     sung = [(l["time_ms"] + j, l["text"]) for l, j in zip(lrc, jitter)]
     result, _ = run(RunConfig(unit="word"), lines=lrc, events=sung)
     assert result["stats"]["shift_applied_ms"] == 0
+
+
+def test_backing_vocals_in_parentheses_are_not_forced():
+    from pipeline import mark_backing
+    from text import syllabify_line
+
+    syls = syllabify_line("It's me (hi) I'm the problem", "en", lambda x: x)
+    mark_backing(syls)
+    assert [s.text for s in syls if getattr(s, "backing", False)] == ["(hi) "]
+    whole = syllabify_line("(Ooh, ooh, ooh)", "en", lambda x: x)
+    mark_backing(whole)
+    assert not any(getattr(s, "backing", False) for s in whole)
+
+    # The lead sings "it's me", then a long pause (where only a quiet echo would be), then
+    # "the problem"; the echo isn't in the audio at all.
+    lrc = [{"time_ms": 1000, "text": "it's me (it's me) the problem"}]
+    sung = [(1000, "it's me"), (3000, "the problem")]
+    forced, _ = run(RunConfig(unit="word", skip_backing=False, auto_shift=False), lines=lrc, events=sung)
+    skipped, _ = run(RunConfig(unit="word", auto_shift=False), lines=lrc, events=sung)
+    assert skipped["lines"][0]["confidence"] > forced["lines"][0]["confidence"]
+    segs = skipped["lines"][0]["segments"]
+    assert "".join(s["text"] for s in segs) == "it's me (it's me) the problem"
+    assert [s["start_ms"] for s in segs if s["text"].startswith("the")] == [3000]

@@ -181,6 +181,8 @@ const FIELDS = [
   { key: "min_confidence", label: "Min confidence", type: "number", step: 0.25,
     help: "Lines scoring below this keep line timing only." },
   { key: "offset_ms", label: "Offset (ms)", type: "number", step: 10, help: "Positive makes every syllable later." },
+  { key: "skip_backing", label: "Skip (backing vocals)", type: "checkbox",
+    help: "Text in parentheses isn't forced onto the audio; its syllables are timed from their neighbours." },
   { key: "auto_shift", label: "Auto shift", type: "checkbox",
     help: "If the singing sits consistently early or late against the LRC (a misjudged recording start), shift the audio to match first." },
   { key: "retime_lines", label: "Move line starts", type: "checkbox", help: "Start each aligned line at its first syllable." },
@@ -268,7 +270,7 @@ function updateFormState() {
   for (const fd of FIELDS) {
     let off = false;
     if (fd.only && fd.only !== S.cfg.mode) off = true;
-    if (even && ["separator", "mode", "star", "min_confidence", "pad_before_ms", "pad_after_ms", "max_window_ms", "anchor_slack_ms", "auto_shift"].includes(fd.key)) off = true;
+    if (even && ["separator", "mode", "star", "min_confidence", "pad_before_ms", "pad_after_ms", "max_window_ms", "anchor_slack_ms", "auto_shift", "skip_backing"].includes(fd.key)) off = true;
     const wrap = document.querySelector(`.field[data-key="${fd.key}"]`);
     wrap.classList.toggle("disabled", off);
     $("f_" + fd.key).disabled = off;

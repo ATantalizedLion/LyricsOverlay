@@ -118,6 +118,8 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
   a recording started, the audio is shifted to match before aligning. Without it, line
   windows cut lines off and every syllable is off by the same amount. Runs that were
   shifted get a "shifted" tag; click it to listen with the same shift.
+- **Skip (backing vocals)** (on by default): text in parentheses, usually backing vocals
+  or echoes, isn't forced onto the audio; its syllables are timed from their neighbours.
 - **Delete all recordings…** (top right) removes every recording the overlay made, plus
   the lab's vocals made from them and the "already tried" markers, so those songs get
   recorded again. It can also take out the syllable timing made from them, since the

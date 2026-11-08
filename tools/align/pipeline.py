@@ -71,6 +71,10 @@ class RunConfig:
     offset_ms: int = 0
     """Shifts all syllable times; positive makes them later."""
     retime_lines: bool = False
+    skip_backing: bool = True
+    """Don't force text in parentheses (usually backing vocals or echoes, which the
+    separated vocals barely contain or overlap with the lead) onto the audio: a wildcard
+    takes its place and its syllables are timed from their neighbours."""
     auto_shift: bool = True
     """If the singing sits consistently early or late against the LRC line times (typically
     because a recording's start position was misjudged), shift the audio to match the
@@ -412,9 +416,32 @@ def _targets(syllables: list[Syllable], aligner: CtcAligner, owner_base=()):
                 and syl.word_index != syllables[i - 1].word_index and syl.tokens):
             targets.append(aligner.word_sep)
             owner.append(None)
+        if getattr(syl, "backing", False):
+            if not targets or targets[-1] != aligner.star:
+                targets.append(aligner.star)
+                owner.append(None)
+            continue
         targets += syl.tokens
         owner += [(*owner_base, i)] * len(syl.tokens)
     return targets, owner
+
+
+def mark_backing(syllables: list[Syllable]) -> None:
+    """Flags the syllables that sit inside parentheses, unless the whole line does."""
+    depth, flags = 0, []
+    for syl in syllables:
+        inside = True
+        for ch in syl.text:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth = max(0, depth - 1)
+            elif not ch.isspace() and depth == 0 and ch not in ",.!?;:'\"":
+                inside = False
+        flags.append(inside and any(c.isalnum() for c in syl.text))
+    if any(flags) and not all(f or not any(c.isalnum() for c in s.text) for f, s in zip(flags, syllables)):
+        for syl, f in zip(syllables, flags):
+            syl.backing = f
 
 
 def _times_from_spans(spans, owner, n_syllables, frame0: int, key=lambda o: o):
@@ -480,11 +507,14 @@ def align_lines(em: np.ndarray, aligner: CtcAligner, lines, sylls, cfg: RunConfi
     for line, syllables, (start, end) in zip(lines, sylls, line_windows(lines, song_end_ms, cfg)):
         f0, f1 = start // FRAME_MS, min(len(em), end // FRAME_MS)
         targets, owner = _targets(syllables, aligner)
-        if not targets or f1 - f0 < 5:
+        if not any(x is not None for x in owner) or f1 - f0 < 5:
             results.append(None)
             continue
         if cfg.star:
-            targets, owner = [aligner.star, *targets, aligner.star], [None, *owner, None]
+            if targets[0] != aligner.star:
+                targets, owner = [aligner.star, *targets], [None, *owner]
+            if targets[-1] != aligner.star:
+                targets, owner = [*targets, aligner.star], [*owner, None]
         res = forced_align_detailed(em[f0:f1], targets, blank=aligner.blank)
         if res is None:
             results.append(None)
@@ -509,8 +539,10 @@ def align_song(em: np.ndarray, aligner: CtcAligner, lines, sylls, cfg: RunConfig
         ranges.append((0, T))
     for li, (syllables, (ws, we)) in enumerate(zip(sylls, windows)):
         t, o = _targets(syllables, aligner, owner_base=(li,))
-        if not t:
+        if not any(x is not None for x in o):
             continue
+        if t[0] == aligner.star and targets and targets[-1] == aligner.star:
+            t, o = t[1:], o[1:]
         if cfg.anchor_slack_ms > 0:
             r = (max(0, (ws - cfg.anchor_slack_ms) // FRAME_MS), min(T, (we + cfg.anchor_slack_ms) // FRAME_MS))
         else:
@@ -522,7 +554,7 @@ def align_song(em: np.ndarray, aligner: CtcAligner, lines, sylls, cfg: RunConfig
         targets += t
         owner += o
         ranges += [r if oo is not None else (0, T) for oo in o]
-        if cfg.star:
+        if cfg.star and targets[-1] != aligner.star:
             targets.append(aligner.star)
             owner.append(None)
             ranges.append((0, T))
@@ -605,6 +637,9 @@ def run_alignment(lines: list[dict], audio: Path | None, audio_offset_ms: int, c
 
     sylls = [syllabify_line(l["text"], lang, pool.romanise, tokenize, words=cfg.unit == "word")
              if l["text"].strip() else [] for l in lines]
+    if cfg.skip_backing and aligner is not None:
+        for syllables in sylls:
+            mark_backing(syllables)
 
     shift_applied = 0
     if aligner is not None and cfg.auto_shift:
