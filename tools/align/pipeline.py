@@ -426,6 +426,46 @@ def _targets(syllables: list[Syllable], aligner: CtcAligner, owner_base=()):
     return targets, owner
 
 
+BACKING_MS_PER_SYLLABLE = 280
+
+
+def spread_backing(syllables: list[Syllable], times: list, next_line_ms: int) -> list:
+    """Gives runs of backing-vocal syllables (which weren't aligned) times spread over the
+    gap they sit in: between the lead syllables around them, or, at the end of the line,
+    after the lead at a singing pace and before the next line."""
+    times = list(times)
+    i = 0
+    while i < len(syllables):
+        if not getattr(syllables[i], "backing", False) or times[i] is not None:
+            i += 1
+            continue
+        j = i
+        while j < len(syllables) and getattr(syllables[j], "backing", False) and times[j] is None:
+            j += 1
+        prev_end = next((times[k][1] for k in range(i - 1, -1, -1) if times[k] is not None), None)
+        next_start = next((times[k][0] for k in range(j, len(times)) if times[k] is not None), None)
+        n = j - i
+        if prev_end is None and next_start is None:
+            i = j
+            continue
+        if next_start is None:  # trailing echo
+            a = prev_end
+            b = max(a, min(next_line_ms - 100, a + BACKING_MS_PER_SYLLABLE * n))
+        elif prev_end is None:  # leading
+            b = next_start
+            a = max(0, b - BACKING_MS_PER_SYLLABLE * n)
+        else:
+            a, b = prev_end, max(prev_end, next_start)
+        weights = [max(1, len(syllables[k].tokens)) for k in range(i, j)]
+        total, t = sum(weights), float(a)
+        for k, w in zip(range(i, j), weights):
+            d = (b - a) * w / total
+            times[k] = (int(t), int(t + d))
+            t += d
+        i = j
+    return times
+
+
 def mark_backing(syllables: list[Syllable]) -> None:
     """Flags the syllables that sit inside parentheses, unless the whole line does."""
     depth, flags = 0, []
@@ -679,6 +719,9 @@ def run_alignment(lines: list[dict], audio: Path | None, audio_offset_ms: int, c
             if conf is not None and conf < cfg.min_confidence:
                 entry["status"] = "low"
             else:
+                li = len(out_lines)
+                next_ms = lines[li + 1]["time_ms"] if li + 1 < len(lines) else song_end_ms
+                times = spread_backing(syllables, times, next_ms)
                 segs = build_segments(syllables, times, line["time_ms"])
                 for s in segs:
                     s["start_ms"] = max(0, s["start_ms"] + cfg.offset_ms)

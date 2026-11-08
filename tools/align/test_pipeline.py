@@ -351,3 +351,14 @@ def test_backing_vocals_in_parentheses_are_not_forced():
     segs = skipped["lines"][0]["segments"]
     assert "".join(s["text"] for s in segs) == "it's me (it's me) the problem"
     assert [s["start_ms"] for s in segs if s["text"].startswith("the")] == [3000]
+
+
+def test_backing_syllables_are_spread_after_the_lead():
+    lrc = [{"time_ms": 1000, "text": "it's me (it's me)"}, {"time_ms": 6000, "text": "ok"}]
+    sung = [(1000, "it's me"), (6000, "ok")]
+    result, _ = run(RunConfig(unit="word", auto_shift=False), lines=lrc, events=sung)
+    segs = result["lines"][0]["segments"]
+    backing = [s for s in segs if "(" in s["text"] or ")" in s["text"]]
+    assert len(backing) == 2
+    assert backing[0]["start_ms"] < backing[1]["start_ms"] <= backing[0]["start_ms"] + 400
+    assert backing[1]["end_ms"] <= 6000
