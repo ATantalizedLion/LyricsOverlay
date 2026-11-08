@@ -187,3 +187,14 @@ def test_forced_align_long_lines():
     lp = fake_log_probs([c for ch in text for c in (ch, "-")])
     spans, _ = forced_align(lp, [MMS_LABELS.index(c) if c in MMS_LABELS else 1 for c in text])
     assert spans[-1] == (2 * len(text) - 2, 2 * len(text) - 2)
+
+
+def test_english_fallback_digraphs_and_endings():
+    split = lambda w: [s.text for s in syllabify_line(w, "en", identity)]  # noqa: E731
+    assert split("without") == ["wi", "thout"]
+    assert split("looked") == ["looked"]
+    assert split("checked") == ["checked"]
+    assert split("wanted") == ["wan", "ted"]
+    assert split("loves") == ["loves"]
+    assert split("places") == ["pla", "ces"]
+    assert split("chicken") == ["chick", "en"]

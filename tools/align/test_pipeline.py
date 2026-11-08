@@ -304,3 +304,27 @@ def test_lab_batches(lab_server, tmp_path):
         assert json.loads((e / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"][0]["start_ms"] == 1400
     assert json.loads(call(f"{base}/api/batch/delete", "POST", {"batch": batch})[2]) == {"deleted": 2}
     assert not any(s["run_list"] for s in json.loads(call(f"{base}/api/library")[2])["songs"])
+
+
+def test_auto_shift_matches_singing_to_the_lrc():
+    # Every line is sung 700 ms after its LRC time, as when a recording's start was
+    # misjudged.
+    texts = ["hello world", "never again", "dig down", "find a way", "ok then", "go home"]
+    lrc = [{"time_ms": 1000 + 1500 * i, "text": t} for i, t in enumerate(texts)]
+    sung = [(l["time_ms"] + 700, l["text"]) for l in lrc]
+    shifted, _ = run(RunConfig(unit="word"), lines=lrc, events=sung)
+    assert shifted["stats"]["shift_applied_ms"] == -700
+    assert first_starts(shifted) == [l["time_ms"] for l in lrc]
+    assert shifted["stats"]["lrc_shift_ms"] == 0
+    kept, _ = run(RunConfig(unit="word", auto_shift=False), lines=lrc, events=sung)
+    assert kept["stats"]["shift_applied_ms"] == 0
+    assert kept["stats"]["lrc_shift_ms"] == 700
+
+
+def test_auto_shift_leaves_small_or_inconsistent_shifts_alone():
+    texts = ["hello world", "never again", "dig down", "find a way", "ok then", "go home"]
+    lrc = [{"time_ms": 1000 + 1500 * i, "text": t} for i, t in enumerate(texts)]
+    jitter = [80, -60, 900, -700, 40, 0]
+    sung = [(l["time_ms"] + j, l["text"]) for l, j in zip(lrc, jitter)]
+    result, _ = run(RunConfig(unit="word"), lines=lrc, events=sung)
+    assert result["stats"]["shift_applied_ms"] == 0

@@ -128,6 +128,7 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
         <button id="playBtn" class="primary" style="min-width:70px">Play</button>
         <span id="time">0:00.0</span>
         <label>Listen to <select id="source"></select></label>
+        <label title="Moves the audio against the lyrics, e.g. to match a run that was auto-shifted">Audio shift <input type="number" id="audioShift" value="0" step="10" style="width:70px"> ms</label>
         <label>Speed <select id="rate"><option>0.5</option><option>0.75</option><option selected>1</option></select></label>
         <label>Zoom <input type="range" id="zoom" min="2" max="60" value="12" style="width:110px"></label>
         <label><input type="checkbox" id="follow" checked> Follow</label>
@@ -180,6 +181,8 @@ const FIELDS = [
   { key: "min_confidence", label: "Min confidence", type: "number", step: 0.25,
     help: "Lines scoring below this keep line timing only." },
   { key: "offset_ms", label: "Offset (ms)", type: "number", step: 10, help: "Positive makes every syllable later." },
+  { key: "auto_shift", label: "Auto shift", type: "checkbox",
+    help: "If the singing sits consistently early or late against the LRC (a misjudged recording start), shift the audio to match first." },
   { key: "retime_lines", label: "Move line starts", type: "checkbox", help: "Start each aligned line at its first syllable." },
 ];
 
@@ -265,7 +268,7 @@ function updateFormState() {
   for (const fd of FIELDS) {
     let off = false;
     if (fd.only && fd.only !== S.cfg.mode) off = true;
-    if (even && ["separator", "mode", "star", "min_confidence", "pad_before_ms", "pad_after_ms", "max_window_ms", "anchor_slack_ms"].includes(fd.key)) off = true;
+    if (even && ["separator", "mode", "star", "min_confidence", "pad_before_ms", "pad_after_ms", "max_window_ms", "anchor_slack_ms", "auto_shift"].includes(fd.key)) off = true;
     const wrap = document.querySelector(`.field[data-key="${fd.key}"]`);
     wrap.classList.toggle("disabled", off);
     $("f_" + fd.key).disabled = off;
@@ -311,7 +314,7 @@ async function openSong(id, keepView = false) {
   $("songInfo").innerHTML = `${esc(song.artist)} – ${esc(song.title)} · ${song.lines.length} lines · ` +
     (a ? `${a.kind === "recording" ? "Spotify recording" : esc(a.name)}${a.offset_ms ? ` (starts at ${fmt(a.offset_ms)})` : ""}` : "no audio") +
     (song.problem ? ` · <span class="bad">${esc(song.problem)}</span>` : "");
-  if (changed) setupSources();
+  if (changed) { S.shift = store.get("audioShift:" + id, 0); $("audioShift").value = S.shift; setupSources(); }
   else refreshSourceOptions();
   renderRuns(); renderLines(); renderRef(); renderKaraoke(true);
   if (changed && !keepView) S.view.start = Math.max(0, (song.lines[0]?.time_ms || 0) - 2000);
@@ -332,7 +335,7 @@ async function setSource(src, keepMs) {
   const t = keepMs ?? songMs();
   const wasPlaying = !audio.paused;
   audio.src = `/audio/${enc(S.song.id)}/${enc(src)}`;
-  S.sourceOffset = src === "mix" ? (S.song.audio?.offset_ms || 0) : 0;
+  S.sourceOffset = (src === "mix" ? (S.song.audio?.offset_ms || 0) : 0) + audioShift();
   audio.playbackRate = Number($("rate").value);
   await new Promise((r) => { audio.addEventListener("loadedmetadata", r, { once: true }); audio.addEventListener("error", r, { once: true }); });
   seek(t);
@@ -340,6 +343,16 @@ async function setSource(src, keepMs) {
   S.peaks = null;
   api(`/api/song/${enc(S.song.id)}/peaks?source=${enc(src)}`).then((p) => { S.peaks = p; draw(); }).catch(() => {});
 }
+const audioShift = () => S.shift || 0;
+function setAudioShift(ms) {
+  const t = songMs();
+  S.sourceOffset += ms - audioShift();
+  S.shift = ms;
+  $("audioShift").value = ms;
+  if (S.song) store.set("audioShift:" + S.song.id, ms);
+  seek(t);
+}
+$("audioShift").onchange = () => setAudioShift(Number($("audioShift").value) || 0);
 const songMs = () => audio.currentTime * 1000 + S.sourceOffset;
 function seek(ms) { audio.currentTime = Math.max(0, (ms - S.sourceOffset) / 1000); if (audio.paused) { renderKaraoke(); draw(); } }
 
@@ -398,7 +411,7 @@ function renderRuns() {
         c.offset_ms ? `${c.offset_ms > 0 ? "+" : ""}${c.offset_ms} ms` : null, c.retime_lines ? "moved lines" : null].filter(Boolean).join(" · ");
       return `<tr class="${applied === r.id ? "applied" : ""}" data-id="${r.id}">
         <td><input type="checkbox" data-act="cmp" ${on ? "checked" : ""} title="Compare"> <span class="sw" style="background:${S.colorOf[r.id]}"></span></td>
-        <td><span data-act="rename" title="Click to rename" style="cursor:text">${esc(r.label)}</span>${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}</td>
+        <td><span data-act="rename" title="Click to rename" style="cursor:text">${esc(r.label)}</span>${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}${st.shift_applied_ms ? ` <span class="tag" data-act="shift" style="cursor:pointer" title="This run shifted the audio by ${st.shift_applied_ms} ms to match the LRC. Click to listen with the same shift.">shifted ${st.shift_applied_ms > 0 ? "+" : ""}${st.shift_applied_ms} ms</span>` : ""}</td>
         <td class="muted" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
         <td class="num">${st.aligned}/${st.lines}</td>
         <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}</td>
@@ -418,6 +431,7 @@ $("runs").addEventListener("click", async (e) => {
   const act = e.target.dataset.act; if (!act) return;
   const id = e.target.closest("tr")?.dataset.id;
   const run = id && runById(id);
+  if (act === "shift") { setAudioShift(run.stats.shift_applied_ms); return; }
   if (act === "cmp") {
     S.compare = e.target.checked ? [...S.compare, id] : S.compare.filter((x) => x !== id);
     store.set("compare:" + S.song.id, S.compare); renderLines(); renderKaraoke(true); draw();
@@ -781,7 +795,7 @@ function draw() {
   }
   // waveform
   if (S.peaks) {
-    const [y0, h] = L.wave, mid = y0 + h / 2 + 4, p = S.peaks.peaks, bin = S.peaks.bin_ms, off = S.peaks.offset_ms;
+    const [y0, h] = L.wave, mid = y0 + h / 2 + 4, p = S.peaks.peaks, bin = S.peaks.bin_ms, off = S.peaks.offset_ms + audioShift();
     ctx.fillStyle = C("--wave");
     for (let px = 0; px < w; px++) {
       const a = Math.floor((v.start + (px / w) * v.span - off) / bin), b = Math.max(a + 1, Math.floor((v.start + ((px + 1) / w) * v.span - off) / bin));

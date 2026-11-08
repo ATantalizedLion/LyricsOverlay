@@ -14,7 +14,7 @@ import json
 import shutil
 import subprocess
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +71,11 @@ class RunConfig:
     offset_ms: int = 0
     """Shifts all syllable times; positive makes them later."""
     retime_lines: bool = False
+    auto_shift: bool = True
+    """If the singing sits consistently early or late against the LRC line times (typically
+    because a recording's start position was misjudged), shift the audio to match the
+    LRC before aligning. Without it, line windows cut lines off and timing is off by the
+    same amount."""
     """Move each aligned line's start to its first syllable, for LRCs with sloppy times."""
 
     @classmethod
@@ -601,6 +606,18 @@ def run_alignment(lines: list[dict], audio: Path | None, audio_offset_ms: int, c
     sylls = [syllabify_line(l["text"], lang, pool.romanise, tokenize, words=cfg.unit == "word")
              if l["text"].strip() else [] for l in lines]
 
+    shift_applied = 0
+    if aligner is not None and cfg.auto_shift:
+        t0 = time.time()
+        shift = estimate_shift(em, aligner, lines, sylls, cfg, song_end_ms)
+        timings["shift_estimate_s"] = round(time.time() - t0, 1)
+        if shift is not None:
+            med, spread = shift
+            log(f"Singing starts {med:+d} ms from the LRC line times (± {spread} ms) across the song; "
+                f"shifting the audio by {-med:+d} ms to match (turn off Auto shift to keep it as is).")
+            em = shift_emissions(em, med, aligner.blank)
+            shift_applied = -med
+
     t0 = time.time()
     if aligner is None:
         results = align_even(lines, sylls, song_end_ms)
@@ -661,11 +678,46 @@ def run_alignment(lines: list[dict], audio: Path | None, audio_offset_ms: int, c
         "mean_confidence": round(float(np.mean(confs)), 3) if confs else None,
         "lrc_shift_ms": shift,
         "lrc_shift_spread_ms": spread,
+        "shift_applied_ms": shift_applied,
         **timings,
         "total_s": round(time.time() - t_start, 1),
     }
     log(f"Aligned {stats['aligned']} of {stats['lines']} lines in {stats['total_s']}s.")
     return {"config": cfg.to_dict(), "lang": lang, "lines": out_lines, "stats": stats}
+
+
+MIN_SHIFT_MS = 150
+
+
+def estimate_shift(em, aligner, lines, sylls, cfg: RunConfig, song_end_ms: int):
+    """(median, spread) in ms of where singing starts relative to the LRC line times, from a
+    loosely anchored whole-song alignment; None unless it's a clear, consistent shift."""
+    probe = replace(cfg, mode="song", anchor_slack_ms=max(cfg.anchor_slack_ms, 2500))
+    results = align_song(em, aligner, lines, sylls, probe, song_end_ms)
+    d = []
+    for line, res in zip(lines, results):
+        if res is None or res[1] < cfg.min_confidence:
+            continue
+        starts = [t[0] for t in res[0] if t is not None]
+        if starts:
+            d.append(starts[0] - line["time_ms"])
+    if len(d) < 5:
+        return None
+    med = float(np.median(d))
+    spread = float(np.median(np.abs(np.array(d) - med)))
+    if abs(med) < MIN_SHIFT_MS or spread > max(200.0, abs(med) / 2):
+        return None
+    return int(round(med / FRAME_MS)) * FRAME_MS, int(round(spread))
+
+
+def shift_emissions(em: np.ndarray, shift_ms: int, blank: int) -> np.ndarray:
+    """Moves everything `shift_ms` earlier (later if negative), padding with silence."""
+    k = int(round(shift_ms / FRAME_MS))
+    if k == 0:
+        return em
+    pad = np.full((abs(k), em.shape[1]), -20.0, dtype=em.dtype)
+    pad[:, blank] = 0.0
+    return np.concatenate([em[k:], pad]) if k > 0 else np.concatenate([pad, em[:k]])
 
 
 def lrc_shift(lines: list[dict]) -> tuple[int | None, int | None]:

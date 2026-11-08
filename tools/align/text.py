@@ -125,18 +125,43 @@ def split_syllables(word: str, lang: str | None) -> list[str]:
 _VOWELS = set("aeiouyàáâäãåèéêëìíîïòóôöõùúûüýÿæœø")
 
 
+# Consonant pairs that sound as one consonant. Most start the next syllable (no-thing,
+# wi-thout); "ck" and "ng" end the previous one (chick-en, sing-er).
+_DIGRAPHS = {"th", "ch", "sh", "ph", "wh", "gh", "qu"}
+_DIGRAPHS_LEFT = {"ck", "ng"}
+
+
+def _consonant_units(run: str) -> list[str]:
+    units, i = [], 0
+    while i < len(run):
+        pair = run[i:i + 2]
+        if pair in _DIGRAPHS or pair in _DIGRAPHS_LEFT:
+            units.append(pair)
+            i += 2
+        else:
+            units.append(run[i])
+            i += 1
+    return units
+
+
 def vowel_group_positions(core: str, lang: str | None) -> list[int]:
     """Rough syllable boundaries for a single word: one syllable per vowel group, a lone
-    consonant between vowels starts the next syllable (ma-ny) and a cluster is split
-    after its first consonant (gon-na)."""
+    consonant (or digraph like "th") between vowels starts the next syllable (ma-ny,
+    no-thing) and a cluster is split after its first consonant (gon-na)."""
     lower = core.lower()
     if not lower.isalpha():
         return []
     is_vowel = [c in _VOWELS for c in lower]
     if lower[0] == "y":
         is_vowel[0] = False  # "you", "yeah"
-    if lang and lang.startswith("en") and len(lower) > 3 and lower.endswith("e") and not is_vowel[-2]:
-        is_vowel[-1] = False  # silent final e: "make", "time"
+    if lang and lang.startswith("en") and len(lower) > 3:
+        if lower.endswith("e") and not is_vowel[-2]:
+            is_vowel[-1] = False  # silent final e: "make", "time"
+        elif lower.endswith("ed") and lower[-3] not in "td" and not is_vowel[-3]:
+            is_vowel[-2] = False  # "looked", "loved", but not "wanted"
+        elif (lower.endswith("es") and not is_vowel[-3] and lower[-3] not in "sxzcg"
+              and lower[-4:-2] not in ("ch", "sh")):
+            is_vowel[-2] = False  # "loves", "times", but not "places", "wishes"
     groups = []  # (start, end) of each vowel run
     i = 0
     while i < len(lower):
@@ -150,8 +175,11 @@ def vowel_group_positions(core: str, lang: str | None) -> list[int]:
             i += 1
     positions = []
     for (_, end), (start, _) in zip(groups, groups[1:]):
-        consonants = start - end
-        positions.append(end + (0 if consonants <= 1 else 1))
+        units = _consonant_units(lower[end:start])
+        if len(units) <= 1:
+            positions.append(start if units and units[0] in _DIGRAPHS_LEFT else end)
+        else:
+            positions.append(end + len(units[0]))
     return [p for p in positions if 0 < p < len(core)]
 
 

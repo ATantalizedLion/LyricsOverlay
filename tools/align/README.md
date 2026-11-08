@@ -109,6 +109,15 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
 - **Use in overlay** writes a run's timing into the overlay's lyrics cache.
   **Use as default** saves the current settings for `align.py --pending`, so once you've
   found settings you like, batch-processing uses them.
+- **Library** (pick "Library" at the top): **Run on all songs** runs the current settings
+  on every recorded song as one batch. Batches are compared on the share of lines timed,
+  confidence and *shift* (how far singing sits from the LRC line times), and **Use for
+  all** puts a whole batch into the overlay.
+- **Auto shift** (on by default): when a song's singing sits consistently early or late
+  against the LRC line times, which happens when the overlay misjudged where in the song
+  a recording started, the audio is shifted to match before aligning. Without it, line
+  windows cut lines off and every syllable is off by the same amount. Runs that were
+  shifted get a "shifted" tag; click it to listen with the same shift.
 - **Delete all recordings…** (top right) removes every recording the overlay made, plus
   the lab's vocals made from them and the "already tried" markers, so those songs get
   recorded again. It can also take out the syllable timing made from them, since the
