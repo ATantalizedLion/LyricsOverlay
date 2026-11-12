@@ -71,9 +71,27 @@ def word_starts(lines: list[str], words: list[str], starts_ms: list[int | None])
     return {li: taps for li, taps in out.items() if any(t is not None for t in taps)}
 
 
+def find_audio(root: Path, filepath: str) -> Path:
+    """The song's audio. In the dataset, mp3/ holds symlinks into subsets/<lang>/mp3; a
+    checkout without symlink support (Windows) turns them into small text files holding
+    the link target."""
+    audio = root / "mp3" / filepath
+    if audio.is_file() and audio.stat().st_size < 1024:
+        try:
+            target = (audio.parent / audio.read_text(encoding="utf-8").strip()).resolve()
+            if target.is_file():
+                return target
+        except (OSError, UnicodeDecodeError):
+            pass
+    if audio.is_file() and audio.stat().st_size >= 1024:
+        return audio
+    found = sorted(root.glob(f"subsets/*/mp3/{filepath}"))
+    return found[0] if found else audio
+
+
 def import_song(root: Path, row: dict) -> str | None:
     name = Path(row["Filepath"]).stem
-    audio = root / "mp3" / row["Filepath"]
+    audio = find_audio(root, row["Filepath"])
     lines_csv = root / "annotations" / "lines" / f"{name}.csv"
     words_csv = root / "annotations" / "words" / f"{name}.csv"
     words_txt = root / "lyrics" / f"{name}.words.txt"

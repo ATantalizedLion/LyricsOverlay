@@ -519,6 +519,12 @@ def test_testset_import_scores_batches(lab_server, monkeypatch):
     (root / "annotations" / "words" / "Band_-_Tune.csv").write_text(
         "word_start,word_end,line_end\n" + "".join(f"{t},{t},nan\n" for _, t in words))
 
+    # mp3/ holds a link stub, as a Windows checkout writes symlinks; the real file is in subsets/.
+    (root / "subsets" / "en" / "mp3").mkdir(parents=True)
+    (root / "mp3" / "Band_-_Tune.wav").replace(root / "subsets" / "en" / "mp3" / "Band_-_Tune.wav")
+    (root / "mp3" / "Band_-_Tune.wav").write_text("../subsets/en/mp3/Band_-_Tune.wav")
+    assert testset.find_audio(root, "Band_-_Tune.wav") == (root / "subsets/en/mp3/Band_-_Tune.wav").resolve()
+
     row = {"Filepath": "Band_-_Tune.wav", "Artist": "Band", "Title": "Tune", "Language": "English"}
     name = testset.import_song(root, row)
     song = json.loads(call(f"{base}/api/song/{urllib.request.quote(name)}")[2])
