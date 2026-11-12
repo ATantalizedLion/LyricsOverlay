@@ -165,8 +165,15 @@ def original_lines(entry: Path) -> list[dict]:
     return [{"time_ms": int(l["time_ms"]), "text": t} for l, t in zip(current, texts)]
 
 
-def write_cache_lines(entry: Path, lines: list[dict]) -> Path:
-    """Writes aligned lines into the entry's lyrics.lrc, keeping the original as .bak."""
+OVERLAY_INFO = "overlay.json"
+
+
+def write_cache_lines(entry: Path, lines: list[dict], shift_ms: int = 0, source: str = "") -> Path:
+    """Writes aligned lines into the entry's lyrics.lrc, keeping the original as .bak.
+
+    Next to the lab's files it notes how the timing was made (`source`) and the audio
+    shift the alignment applied, so the lab can score that timing against tapped
+    references, which are kept relative to the recording."""
     lyrics_file = entry / "lyrics.lrc"
     song = json.loads(lyrics_file.read_text(encoding="utf-8"))
     backup = entry / "lyrics.lrc.bak"
@@ -174,7 +181,21 @@ def write_cache_lines(entry: Path, lines: list[dict]) -> Path:
         shutil.copyfile(lyrics_file, backup)
     song["synced_lyrics"] = to_cache_lines(lines)
     lyrics_file.write_text(json.dumps(song, indent=2, ensure_ascii=False), encoding="utf-8")
+    info = lab_dir(entry) / OVERLAY_INFO
+    if any(l.get("segments") for l in lines):
+        info.parent.mkdir(parents=True, exist_ok=True)
+        info.write_text(json.dumps({"shift_applied_ms": int(shift_ms or 0), "source": source}), encoding="utf-8")
+    else:
+        info.unlink(missing_ok=True)
     return lyrics_file
+
+
+def overlay_info(entry: Path) -> dict | None:
+    """What write_cache_lines noted about the entry's current timing; None if unknown."""
+    try:
+        return json.loads((lab_dir(entry) / OVERLAY_INFO).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def process_entry(entry: Path, audio: Path, pool: ModelPool, cfg: RunConfig, args) -> int:
@@ -195,7 +216,8 @@ def process_entry(entry: Path, audio: Path, pool: ModelPool, cfg: RunConfig, arg
         print(lrc)
         return aligned
     if aligned:
-        lyrics_file = write_cache_lines(entry, result["lines"])
+        lyrics_file = write_cache_lines(entry, result["lines"], result["stats"].get("shift_applied_ms") or 0,
+                                        "align.py")
         print(f"Updated {lyrics_file} (original kept as lyrics.lrc.bak). "
               "It shows up the next time the song starts.")
     return aligned

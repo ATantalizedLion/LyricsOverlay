@@ -29,7 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from align import (ATTEMPTED_MARKER, RECORDING_FILE, cache_root, data_dir, find_cache_entry, lab_dir, original_lines,
-                   read_tags, recording_offset_ms, recording_problem, write_cache_lines)
+                   overlay_info, read_tags, recording_offset_ms, recording_problem, write_cache_lines)
 from pipeline import (ALIGNERS, SEPARATORS, ModelPool, RunConfig, defaults_file, load_defaults,
                       run_alignment, vocals_cache_path)
 from text import split_units
@@ -81,7 +81,12 @@ def list_songs() -> list[dict]:
     for meta_file in cache_root().glob("*/.meta"):
         entry = meta_file.parent
         audio, _ = audio_source(entry)
-        if audio is None:
+        lab = lab_dir(entry)
+        runs = run_files(lab)
+        if audio is None and not runs and not (lab / "reference.json").exists() \
+                and not (entry / "lyrics.lrc.bak").exists():
+            # Never recorded and nothing to review. (The .bak marks lyrics that were
+            # aligned once, which stay reviewable after their recording is deleted.)
             continue
         try:
             lines = original_lines(entry)
@@ -90,9 +95,10 @@ def list_songs() -> list[dict]:
         if not lines:
             continue
         meta = read_json(meta_file, {})
-        lab = lab_dir(entry)
-        runs = list((lab / "runs").glob("*.json")) if (lab / "runs").exists() else []
         current = read_json(entry / "lyrics.lrc", {}).get("synced_lyrics") or []
+        if audio is None and not runs and not any(l.get("segments") for l in current) \
+                and not (lab / "reference.json").exists():
+            continue
         songs.append({
             "id": entry.name,
             "title": meta.get("track_name", entry.name),
@@ -101,7 +107,7 @@ def list_songs() -> list[dict]:
             "runs": len(runs),
             "has_reference": (lab / "reference.json").exists(),
             "aligned_in_overlay": any(l.get("segments") for l in current),
-            "source": "recording" if audio.name == RECORDING_FILE else "file",
+            "source": None if audio is None else "recording" if audio.name == RECORDING_FILE else "file",
         })
     songs.sort(key=lambda s: (s["artist"].casefold(), s["title"].casefold()))
     return songs
@@ -109,6 +115,40 @@ def list_songs() -> list[dict]:
 
 def run_summary(run: dict) -> dict:
     return {k: v for k, v in run.items() if k != "lines"}
+
+
+_summary_cache: dict[str, tuple[tuple, dict]] = {}
+
+
+def run_files(lab: Path) -> list[Path]:
+    runs = lab / "runs"
+    return sorted(runs.glob("*.json")) if runs.exists() else []
+
+
+def cached_run_summary(f: Path) -> dict | None:
+    """The run without its lines, parsed once per file version: the library lists every
+    run of every song, and run files are large."""
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _summary_cache.get(str(f))
+    if hit and hit[0] == stamp:
+        return hit[1]
+    run = read_json(f)
+    summary = run_summary(run) if run else None
+    if summary is not None:
+        remember(_summary_cache, str(f), (stamp, summary), 5000)
+    return summary
+
+
+def remember(cache: dict, key, value, limit: int):
+    """Stores `value`, dropping the oldest entries past `limit`."""
+    cache[key] = value
+    while len(cache) > limit:
+        del cache[next(iter(cache))]
+    return value
 
 
 _problem_cache: dict[tuple, str | None] = {}
@@ -124,13 +164,14 @@ def cached_recording_problem(entry: Path) -> str | None:
     key = (str(rec), st.st_mtime, st.st_size)
     if key not in _problem_cache:
         try:
-            _problem_cache[key] = recording_problem(entry)
+            problem = recording_problem(entry)
         except Exception as e:  # noqa: BLE001
-            _problem_cache[key] = f"couldn't check the recording: {e}"
+            problem = f"couldn't check the recording: {e}"
+        remember(_problem_cache, key, problem, 2000)
     return _problem_cache[key]
 
 
-def overlay_run(lines: list[dict], current: list[dict]) -> dict:
+def overlay_run(lines: list[dict], current: list[dict], info: dict | None = None) -> dict:
     """The syllable timing the overlay uses now (e.g. from align.py --pending), shown as a
     read-only run so new runs can be compared with it."""
     out = []
@@ -142,7 +183,9 @@ def overlay_run(lines: list[dict], current: list[dict]) -> dict:
     sung = [l for l in out if l["status"] != "empty"]
     return {"id": "overlay", "label": "In overlay now", "readonly": True, "created": 0, "config": {},
             "lines": out, "stats": {"lines": len(sung), "aligned": sum(l["status"] == "ok" for l in sung),
-                                    "mean_confidence": None, "total_s": None}}
+                                    "mean_confidence": None, "total_s": None,
+                                    # None: written before the shift was recorded, so unknown
+                                    "shift_applied_ms": None if info is None else info.get("shift_applied_ms", 0)}}
 
 
 def song_detail(name: str) -> dict:
@@ -159,7 +202,7 @@ def song_detail(name: str) -> dict:
             pos += len(u)
         line["units"] = units
     runs = []
-    for f in sorted((lab / "runs").glob("*.json")) if (lab / "runs").exists() else []:
+    for f in run_files(lab):
         run = read_json(f)
         if run:
             runs.append(run)
@@ -167,7 +210,7 @@ def song_detail(name: str) -> dict:
     applied = read_json(lab / "applied.json")
     current = read_json(entry / "lyrics.lrc", {}).get("synced_lyrics") or []
     if any(l.get("segments") for l in current) and not (applied and any(r["id"] == applied.get("run_id") for r in runs)):
-        runs.insert(0, overlay_run(lines, current))
+        runs.insert(0, overlay_run(lines, current, overlay_info(entry)))
     problem = cached_recording_problem(entry) if audio is not None and audio.name == RECORDING_FILE else None
     vocals = [s for s in SEPARATORS if s != "none" and vocals_cache_path(lab, s).exists()]
     return {
@@ -180,10 +223,67 @@ def song_detail(name: str) -> dict:
         "problem": problem,
         "lines": lines,
         "runs": runs,
-        "reference": read_json(lab / "reference.json"),
+        "reference": remap_reference(read_json(lab / "reference.json"), lines),
         "applied": applied,
         "vocals": vocals,
     }
+
+
+def remap_reference(ref: dict | None, lines: list[dict]) -> dict | None:
+    """Tapped words are stored per line number, with each line's text. If the lyrics
+    changed since (lines added or removed), move each line's taps to the line with the
+    same text and word count nearest its old number, and drop taps for lines that are gone."""
+    if not ref or not ref.get("texts"):
+        return ref
+    words, texts = ref.get("words") or {}, ref["texts"]
+    out, used = {}, set()
+    for key, taps in words.items():
+        try:
+            old = int(key)
+        except ValueError:
+            continue
+        text = texts.get(key)
+        if text is None:
+            if old < len(lines):
+                out[str(old)] = taps
+            continue
+        matches = [i for i, l in enumerate(lines)
+                   if l["text"] == text and len(l.get("units", [])) == len(taps) and i not in used]
+        if matches:
+            new = min(matches, key=lambda i: abs(i - old))
+            used.add(new)
+            out[str(new)] = taps
+    return {**ref, "words": out, "texts": {k: lines[int(k)]["text"] for k in out}}
+
+
+# ---------------------------------------------------------------------------
+# Lab caches (separated vocals and model output)
+
+
+def lab_caches() -> list[Path]:
+    root = data_dir() / "align-lab"
+    return [d for d in root.glob("*/*") if d.name in ("vocals", "emissions") and d.is_dir()] if root.exists() else []
+
+
+def cache_overview() -> dict:
+    size, songs = 0, set()
+    for d in lab_caches():
+        for f in d.rglob("*"):
+            if f.is_file():
+                size += f.stat().st_size
+                songs.add(d.parent.name)
+    return {"mb": round(size / 1e6), "songs": len(songs)}
+
+
+def clear_caches() -> dict:
+    """Deletes separated vocals and model output for every song. Runs, references and the
+    overlay's timing stay; the next run on a song separates it again."""
+    import shutil
+
+    before = cache_overview()
+    for d in lab_caches():
+        shutil.rmtree(d, ignore_errors=True)
+    return before
 
 
 # ---------------------------------------------------------------------------
@@ -256,11 +356,7 @@ def library() -> dict:
     for song in list_songs():
         entry = cache_root() / song["id"]
         lab = lab_dir(entry)
-        runs = []
-        for f in sorted((lab / "runs").glob("*.json")) if (lab / "runs").exists() else []:
-            run = read_json(f)
-            if run:
-                runs.append(run_summary(run))
+        runs = [r for r in map(cached_run_summary, run_files(lab)) if r]
         song["run_list"] = sorted(runs, key=lambda r: r.get("created", 0))
         song["applied"] = read_json(lab / "applied.json")
         songs.append(song)
@@ -282,7 +378,7 @@ def batch_runs(batch: str) -> list[tuple[Path, Path, dict]]:
 def apply_batch(batch: str) -> int:
     applied = 0
     for entry, _, run in batch_runs(batch):
-        write_cache_lines(entry, run["lines"])
+        write_cache_lines(entry, run["lines"], run["stats"].get("shift_applied_ms") or 0, "lab")
         write_json(lab_dir(entry) / "applied.json",
                    {"run_id": run["id"], "label": run.get("label"), "at": time.time()})
         applied += 1
@@ -291,6 +387,10 @@ def apply_batch(batch: str) -> int:
 
 # ---------------------------------------------------------------------------
 # Background jobs (one at a time, so models are loaded once and shared)
+
+
+MAX_LOG_LINES = 500
+MAX_FINISHED_JOBS = 200
 
 
 class Jobs:
@@ -307,6 +407,9 @@ class Jobs:
                "batch": batch, "status": "queued", "log": [], "run_id": None, "error": None, "created": time.time()}
         with self.lock:
             self.jobs[job["id"]] = job
+            finished = [j for j in self.jobs.values() if j["status"] in ("done", "error", "cancelled")]
+            for old in sorted(finished, key=lambda j: j["created"])[:max(0, len(finished) - MAX_FINISHED_JOBS)]:
+                del self.jobs[old["id"]]
         self.queue.put(job["id"])
         return job
 
@@ -328,7 +431,9 @@ class Jobs:
 
     def _work(self) -> None:
         while True:
-            job = self.jobs[self.queue.get()]
+            job = self.jobs.get(self.queue.get())
+            if job is None:
+                continue
             with self.lock:
                 if job["status"] != "queued":
                     continue
@@ -337,6 +442,8 @@ class Jobs:
             def log(msg: str, job=job) -> None:
                 print(msg, flush=True)
                 job["log"].append(msg)
+                if len(job["log"]) > MAX_LOG_LINES:
+                    del job["log"][:len(job["log"]) - MAX_LOG_LINES]
 
             try:
                 if self.pool is None:
@@ -353,6 +460,8 @@ class Jobs:
     def _run(self, job: dict, log) -> str:
         entry = entry_path(job["song"])
         audio, offset = audio_source(entry)
+        if audio is None:
+            raise ValueError("this song has no recording or audio file to align")
         cfg = RunConfig.from_dict(job["config"])
         meta = read_json(entry / ".meta", {})
         result = run_alignment(original_lines(entry), audio, offset, cfg, self.pool,
@@ -393,7 +502,7 @@ def peaks(path: Path, offset_ms: int, bin_ms: int = 10) -> dict:
         values = np.concatenate(out) if out else np.zeros(0)
         top = float(np.percentile(values, 99.5)) if len(values) else 1.0
         scaled = np.clip(values / max(top, 1e-6), 0, 1) ** 0.6 * 255
-        _peaks_cache[key] = {"bin_ms": bin_ms, "peaks": scaled.astype(int).tolist()}
+        remember(_peaks_cache, key, {"bin_ms": bin_ms, "peaks": scaled.astype(int).tolist()}, 20)
     return {"offset_ms": offset_ms, **_peaks_cache[key]}
 
 
@@ -506,6 +615,8 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif parts == ["api", "recordings"]:
             self._json(recordings_overview())
+        elif parts == ["api", "cache"]:
+            self._json(cache_overview())
         elif parts == ["api", "library"]:
             self._json(library())
         elif parts == ["api", "songs"]:
@@ -529,6 +640,11 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["api", "jobs", "cancel"]:
             self._json({"cancelled": self.jobs.cancel_queued()})
             return
+        if parts == ["api", "cache", "clear"]:
+            if any(j["status"] in ("queued", "running") for j in self.jobs.list()):
+                raise ValueError("Wait for the queued runs to finish (or cancel them) first.")
+            self._json(clear_caches())
+            return
         if parts == ["api", "recordings", "delete"]:
             self._json(delete_recordings(bool(body.get("clear_timing"))))
             return
@@ -538,8 +654,9 @@ class Handler(BaseHTTPRequestHandler):
             label = str(body.get("label") or cfg.summary())[:120]
             songs, skipped = [], []
             for s in list_songs():
-                problem = (cached_recording_problem(cache_root() / s["id"])
-                           if s["source"] == "recording" else None)
+                if s["source"] is None:  # recording deleted; listed only for review
+                    continue
+                problem = cached_recording_problem(cache_root() / s["id"]) if s["source"] == "recording" else None
                 if problem:
                     skipped.append({"song": f"{s['artist']} - {s['title']}", "problem": problem})
                 else:
@@ -569,6 +686,8 @@ class Handler(BaseHTTPRequestHandler):
         entry = entry_path(song)
         lab = lab_dir(entry)
         if action == "runs":
+            if audio_source(entry)[0] is None:
+                raise ValueError("This song has no recording to align. Play it in Spotify with recording on first.")
             configs = body.get("configs") or [body.get("config") or {}]
             labels = body.get("labels") or []
             jobs = []
@@ -577,7 +696,11 @@ class Handler(BaseHTTPRequestHandler):
                 jobs.append(self.jobs.submit(song, cfg, labels[i] if i < len(labels) else ""))
             self._json({"jobs": jobs})
         elif action == "reference":
-            write_json(lab / "reference.json", {"words": body.get("words", {}), "updated": time.time()})
+            words = body.get("words", {})
+            lines = original_lines(entry)
+            texts = {k: lines[int(k)]["text"] for k in words if k.isdigit() and int(k) < len(lines)}
+            write_json(lab / "reference.json", {"words": words, "texts": texts, "frame": "recording",
+                                                "updated": time.time()})
             self._json({"ok": True})
         elif action == "label" and len(parts) == 5:
             path = lab / "runs" / f"{safe_id(parts[4])}.json"
@@ -593,7 +716,7 @@ class Handler(BaseHTTPRequestHandler):
                 run = read_json(lab / "runs" / f"{safe_id(run_id)}.json")
                 if not run:
                     raise LookupError("no such run")
-                write_cache_lines(entry, run["lines"])
+                write_cache_lines(entry, run["lines"], run["stats"].get("shift_applied_ms") or 0, "lab")
                 write_json(lab / "applied.json", {"run_id": run_id, "label": run.get("label"), "at": time.time()})
             else:
                 # Back to plain line timing.

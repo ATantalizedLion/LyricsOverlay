@@ -136,6 +136,10 @@ button.danger { background: var(--bad); border-color: var(--bad); color: #2a0b0b
         <button id="delRecBtn" title="Delete every song the overlay recorded from Spotify">Delete all recordings…</button>
         <span class="muted">For starting over when old recordings are broken or out of sync.</span>
       </div>
+      <div class="row" style="margin-top:6px">
+        <button id="clearCacheBtn" title="Delete the separated vocals and model output the lab keeps per song">Clear lab cache…</button>
+        <span class="muted" id="cacheInfo"></span>
+      </div>
     </div>
     <div id="songView" hidden>
       <div class="transport">
@@ -278,7 +282,8 @@ function sweepPlaceholder() {
     min_confidence: "-5, -4, -3", anchor_slack_ms: "0, 1000, 3000", max_window_ms: "10000, 30000" }[fd.key];
   $("sweepValues").placeholder = fd.type === "select" ? Object.keys(fd.opts()).join(", ")
     : fd.type === "checkbox" ? "true, false" : (ex || "values, comma separated");
-  if (fd.type === "select") $("sweepValues").value = Object.keys(fd.opts()).join(", ");
+  // UVR models are slow and an optional install, so a separator sweep leaves them out unless typed in.
+  if (fd.type === "select") $("sweepValues").value = Object.keys(fd.opts()).filter((k) => !k.startsWith("uvr:")).join(", ");
   else $("sweepValues").value = "";
 }
 function readField(fd) {
@@ -318,11 +323,12 @@ async function loadSongs() {
   S.songs = await api("/api/songs");
   const sel = $("song");
   sel.innerHTML = `<option value="">${S.songs.length ? `Library: all ${S.songs.length} songs` : "No recorded songs yet"}</option>` +
-    S.songs.map((s) => `<option value="${esc(s.id)}">${esc(s.artist)} – ${esc(s.title)}${s.runs ? `  (${s.runs} runs)` : ""}</option>`).join("");
+    S.songs.map((s) => `<option value="${esc(s.id)}">${esc(s.artist)} – ${esc(s.title)}${s.runs ? `  (${s.runs} runs)` : ""}${s.source ? "" : "  (no audio)"}</option>`).join("");
   const last = store.get("song", "");
   if (S.songs.some((s) => s.id === last)) { sel.value = last; await openSong(last); }
   else await openSong("");
 }
+const migrated = new Set();
 async function openSong(id, keepView = false) {
   if (!id) {
     S.song = null; store.set("song", ""); audio.pause();
@@ -335,6 +341,18 @@ async function openSong(id, keepView = false) {
   const changed = !S.song || S.song.id !== id;
   S.song = song;
   S.ref = (song.reference && song.reference.words) || {};
+  S.refNote = "";
+  if (song.reference && !song.reference.frame && Object.keys(S.ref).length && !migrated.has(id)) {
+    migrated.add(id);
+    // Taps saved before they were kept relative to the recording include the audio shift
+    // that was set then: take it out once and save them in the new form.
+    const was = store.get("audioShift:" + id, 0) || 0;
+    if (was) {
+      for (const arr of Object.values(S.ref)) arr.forEach((v, k) => { if (v != null) arr[k] = v - was; });
+      S.refNote = `Your earlier taps were made with a ${was} ms audio shift and have been corrected for it.`;
+    }
+    saveRef();
+  }
   if (changed) {
     S.compare = store.get("compare:" + id, null) || song.runs.slice(-3).map((r) => r.id);
     S.cursor = { line: firstLineWithUnits(0), unit: 0 }; S.tapHistory = [];
@@ -346,15 +364,19 @@ async function openSong(id, keepView = false) {
   if (changed) window.scrollTo(0, 0);
   const a = song.audio;
   $("songInfo").innerHTML = `${esc(song.artist)} – ${esc(song.title)} · ${song.lines.length} lines · ` +
-    (a ? `${a.kind === "recording" ? "Spotify recording" : esc(a.name)}${a.offset_ms ? ` (starts at ${fmt(a.offset_ms)})` : ""}` : "no audio") +
+    (a ? `${a.kind === "recording" ? "Spotify recording" : esc(a.name)}${a.offset_ms ? ` (starts at ${fmt(a.offset_ms)})` : ""}` : `<span class="warn" title="Play it in Spotify with recording on to record it again">no audio: the recording was deleted</span>`) +
     (song.problem ? ` · <span class="bad">${esc(song.problem)}</span>` : "");
+  const noAudio = !song.audio;
+  for (const id of ["playBtn", "runBtn", "sweepBtn", "tapBtn"]) $(id).disabled = noAudio;
+  if (noAudio) { audio.pause(); audio.removeAttribute("src"); S.peaks = null; S.sourceOffset = 0; }
   if (changed) {
     // Listen with the latest run's auto shift unless a shift was picked for this song.
     const latest = song.runs.filter((r) => !r.readonly).slice(-1)[0];
     S.shift = store.get("audioShift:" + id, null) ?? (latest?.stats.shift_applied_ms || 0);
-    $("audioShift").value = S.shift; setupSources();
+    $("audioShift").value = S.shift;
+    if (!noAudio) setupSources();
   }
-  else refreshSourceOptions();
+  else if (!noAudio) refreshSourceOptions();
   renderRuns(); renderLines(); renderRef(); renderKaraoke(true);
   if (changed && !keepView) S.view.start = Math.max(0, (song.lines[0]?.time_ms || 0) - 2000);
   draw();
@@ -408,7 +430,7 @@ function setAudioShift(ms) {
   S.sourceOffset += ms - audioShift();
   S.shift = ms;
   $("audioShift").value = ms;
-  if (S.song) { store.set("audioShift:" + S.song.id, ms); renderRef(); renderKaraoke(true); }
+  if (S.song) { store.set("audioShift:" + S.song.id, ms); S.refNote = ""; renderRef(); renderKaraoke(true); }
   seek(t);
 }
 $("audioShift").onchange = () => setAudioShift(Number($("audioShift").value) || 0);
@@ -464,6 +486,7 @@ function renderRuns() {
   const scores = Object.fromEntries(runs.map((r) => [r.id, scoreRun(r)]));
   const bestMedian = Math.min(...Object.values(scores).filter((s) => s && s.median != null).map((s) => s.median));
   const applied = S.song.applied?.run_id;
+  const mixed = new Set(runs.filter((r) => !r.readonly).map((r) => r.config.aligner)).size > 1;
   t.innerHTML = `<tr><th></th><th>Run</th><th>Settings</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num" title="Where lines start being sung relative to the LRC line times (median, ± spread). A big shift with a small spread means the whole song is off.">Shift</th>
     <th class="num">Error</th><th class="num">Bias</th><th class="num">±100</th><th class="num">Timed</th><th class="num">Took</th><th></th></tr>` +
     runs.slice().reverse().map((r) => {
@@ -471,7 +494,8 @@ function renderRuns() {
       const on = S.compare.includes(r.id);
       const settings = r.readonly ? "timing the overlay has now (e.g. from align.py)" : [c.aligner === "even" ? "even split" : `${c.separator} · ${c.aligner} · ${c.mode}`, c.unit,
         c.offset_ms ? `${c.offset_ms > 0 ? "+" : ""}${c.offset_ms} ms` : null, c.retime_lines ? "moved lines" : null].filter(Boolean).join(" · ");
-      const name = r.readonly ? `<span title="Not a lab run: the syllable timing in the overlay's lyrics cache">${esc(r.label)}</span>`
+      const name = r.readonly ? `<span title="Not a lab run: the syllable timing in the overlay's lyrics cache">${esc(r.label)}</span>` +
+          (st.shift_applied_ms == null ? ` <span class="tag" title="This timing was written before the audio shift was saved with it. If it was auto shifted, its error and bias include that shift.">shift unknown</span>` : "")
         : `<span data-act="rename" title="Click to rename" style="cursor:text">${esc(r.label)}</span>`;
       const actions = r.readonly ? "" : `<button data-act="load" title="Put this run's settings in the form">Settings</button>
             <button data-act="apply" title="Write this run's timing into the overlay's lyrics cache">Use in overlay</button>
@@ -481,7 +505,7 @@ function renderRuns() {
         <td>${name}${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}${st.shift_applied_ms ? ` <span class="tag" data-act="shift" style="cursor:pointer" title="This run shifted the audio by ${st.shift_applied_ms} ms to match the LRC. Click to listen with the same shift.">shifted ${st.shift_applied_ms > 0 ? "+" : ""}${st.shift_applied_ms} ms</span>` : ""}</td>
         <td class="muted" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
         <td class="num">${st.aligned}/${st.lines}</td>
-        <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}</td>
+        <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}${mixed && !r.readonly ? ` <span class="tag" title="Confidence is only comparable between runs with the same aligner">${esc(c.aligner)}</span>` : ""}</td>
         <td class="num">${fmtShift(st)}</td>
         <td class="num ${sc && sc.median === bestMedian ? "good" : ""}">${sc && sc.median != null ? Math.round(sc.median) + " ms" : "–"}</td>
         <td class="num">${sc && sc.bias != null ? (sc.bias > 0 ? "+" : "") + Math.round(sc.bias) + " ms" : "–"}</td>
@@ -545,7 +569,20 @@ async function loadLibrary() {
   S.lib = await api("/api/library");
   renderLibrary();
   pollJobs();
+  loadCacheInfo();
 }
+async function loadCacheInfo() {
+  const c = await api("/api/cache").catch(() => null);
+  S.cacheInfo = c;
+  $("cacheInfo").textContent = c ? `${c.mb} MB of separated vocals and model output for ${c.songs} song${c.songs === 1 ? "" : "s"}. Runs and references are kept; the next run on a song separates it again.` : "";
+  $("clearCacheBtn").disabled = !c || !c.songs;
+}
+$("clearCacheBtn").onclick = async () => {
+  const c = S.cacheInfo; if (!c) return;
+  if (!confirm(`Delete ${c.mb} MB of separated vocals and model output for ${c.songs} songs? Runs, references and the overlay's timing stay.`)) return;
+  try { await api("/api/cache/clear", { method: "POST", body: {} }); } catch (e) { alert(e.message); }
+  loadCacheInfo();
+};
 function when(sec) {
   if (!sec) return "–";
   const d = new Date(sec * 1000), now = new Date();
@@ -577,23 +614,27 @@ function renderLibrary() {
   const pending = S.jobs.filter((j) => j.batch && (j.status === "queued" || j.status === "running")).length;
   $("batchInfo").textContent = pending ? `${pending} song${pending === 1 ? "" : "s"} still to process…` : `${lib.songs.length} songs`;
   const best = Math.max(...batches.map((b) => b.timed));
-  $("batches").innerHTML = batches.length ? `<tr><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
-    batches.map((b) => `<tr data-batch="${b.id}"><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
+  const mixed = new Set(batches.map((b) => b.config.aligner)).size > 1;
+  let picked = store.get("shownBatches", null);
+  picked = picked ? picked.filter((id) => batches.some((b) => b.id === id)) : batches.slice(0, 5).map((b) => b.id);
+  S.shownBatches = picked;
+  $("batches").innerHTML = batches.length ? `<tr><th title="Show as a column in the songs table below">Show</th><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
+    batches.map((b) => `<tr data-batch="${b.id}"><td><input type="checkbox" data-act="show" ${picked.includes(b.id) ? "checked" : ""}></td><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
       <td class="num">${b.songs}</td><td class="num ${b.timed === best ? "good" : ""}">${Math.round(b.timed * 100)}%</td>
-      <td class="num">${b.conf == null ? "–" : b.conf.toFixed(2)}</td>
+      <td class="num">${b.conf == null ? "–" : b.conf.toFixed(2)}${mixed ? ` <span class="tag" title="Confidence is only comparable between batches with the same aligner">${esc(b.config.aligner)}</span>` : ""}</td>
       <td class="num">${b.shift == null ? "–" : (b.shift > 0 ? "+" : "") + b.shift + " ms"}<span class="muted"> (|${b.absShift ?? "–"}|)</span></td>
       <td class="num ${b.offSongs ? "warn" : ""}">${b.offSongs}</td>
       <td><button data-act="settings">Settings</button> <button data-act="apply" title="Write this batch's timing into the overlay for every song in it">Use for all</button> <button data-act="del">✕</button></td></tr>`).join("")
     : `<tr><td class="muted" style="padding:14px">No batches yet. Pick settings on the left and press “Run on all songs”.</td></tr>`;
-  const shown = batches.slice(0, 5);
-  $("libSongs").innerHTML = `<tr><th>Song</th><th>In overlay</th>${shown.map((b) => `<th class="num" title="${esc(b.label)}">${esc(b.label.slice(0, 18))}</th>`).join("")}</tr>` +
+  const shown = batches.filter((b) => picked.includes(b.id));
+  $("libSongs").innerHTML = `<tr><th>Song</th><th>In overlay</th>${shown.map((b) => `<th class="num" style="white-space:normal;min-width:120px">${esc(b.label)}<div class="muted">${when(b.created)}</div></th>`).join("")}</tr>` +
     lib.songs.map((song) => {
       const cells = shown.map((b) => {
         const x = b.runs.find((r) => r.song === song.id); if (!x) return `<td class="num muted">–</td>`;
         const st = x.run.stats;
         return `<td class="num" title="confidence ${st.mean_confidence ?? "–"}, shift ${st.lrc_shift_ms ?? "–"} ms">${st.aligned}/${st.lines} · ${fmtShift(st)}</td>`;
       }).join("");
-      return `<tr data-song="${esc(song.id)}" style="cursor:pointer"><td>${esc(song.artist)} – ${esc(song.title)}</td>
+      return `<tr data-song="${esc(song.id)}" style="cursor:pointer"><td>${esc(song.artist)} – ${esc(song.title)}${song.source ? "" : ' <span class="tag" title="The recording was deleted. Runs and timing can still be looked at, but not played or rerun.">no audio</span>'}</td>
         <td class="muted">${song.applied ? esc(song.applied.label || "a run") : song.aligned_in_overlay ? "syllables (from align.py)" : "lines only"}</td>${cells}</tr>`;
     }).join("");
 }
@@ -601,6 +642,10 @@ $("batches").addEventListener("click", async (e) => {
   const act = e.target.dataset.act; if (!act) return;
   const id = e.target.closest("tr").dataset.batch;
   const b = batchesOf(S.lib).find((x) => x.id === id);
+  if (act === "show") {
+    const ids = e.target.checked ? [...S.shownBatches, id] : S.shownBatches.filter((x) => x !== id);
+    store.set("shownBatches", ids); renderLibrary(); return;
+  }
   if (act === "settings") { S.cfg = { ...S.options.builtin, ...b.config }; writeForm(S.cfg); store.set("cfg", S.cfg); }
   if (act === "apply") {
     if (!confirm(`Use “${b.label}” in the overlay for all ${b.songs} songs? Each song's lyrics keep a backup of their original timing.`)) return;
@@ -619,8 +664,9 @@ $("libSongs").addEventListener("click", (e) => {
   $("song").value = tr.dataset.song; openSong(tr.dataset.song);
 });
 $("batchBtn").onclick = async () => {
-  if (!S.songs.length) { alert("There are no recorded songs yet."); return; }
-  if (!confirm(`Run “${summary(S.cfg)}” on all ${S.songs.length} songs? Songs that haven't been separated yet take a while each.`)) return;
+  const playable = S.songs.filter((x) => x.source).length;
+  if (!playable) { alert("There are no recorded songs yet."); return; }
+  if (!confirm(`Run “${summary(S.cfg)}” on all ${playable} songs with audio? Songs that haven't been separated yet take a while each.`)) return;
   try {
     const r = await api("/api/batch", { method: "POST", body: { config: S.cfg, label: $("batchLabel").value.trim() } });
     $("batchLabel").value = "";
@@ -653,7 +699,7 @@ async function pollJobs() {
       return;
     }
   } else {
-    if (finished.length && S.lib) S.lib = await api("/api/library").catch(() => S.lib);
+    if (finished.length && S.lib) { S.lib = await api("/api/library").catch(() => S.lib); loadCacheInfo(); }
     renderLibrary();
   }
   if (jobs.some(isActive)) pollTimer = setTimeout(pollJobs, 1200);
@@ -701,7 +747,7 @@ function askDelete(o) {
   const d = $("delDialog");
   $("delText").textContent = `This deletes ${o.recordings} recording${o.recordings === 1 ? "" : "s"}` +
     (o.leftovers ? ` and ${o.leftovers} unfinished one${o.leftovers === 1 ? "" : "s"}` : "") +
-    ` (${o.mb} MB) and the vocals the lab separated from them. Your runs are kept, but those songs leave the list until they're recorded again. This can't be undone.`;
+    ` (${o.mb} MB) and the vocals the lab separated from them. Your runs are kept, and those songs stay in the list without audio until they're recorded again. This can't be undone.`;
   $("delTimingRow").hidden = !o.aligned;
   $("delTiming").checked = false;
   $("delTimingText").textContent = `Also remove the syllable timing from the ${o.aligned === 1 ? "song that has" : o.aligned + " songs that have"} it, so the overlay records ${o.aligned === 1 ? "it" : "them"} again`;
@@ -812,12 +858,12 @@ function renderRef() {
   }).join("");
   const total = lines.reduce((a, l) => a + l.units.length, 0);
   const tapped = Object.values(S.ref).reduce((a, r) => a + r.filter((x) => x != null).length, 0);
-  $("refStats").textContent = `${tapped} of ${total} words tapped`;
+  $("refStats").textContent = `${tapped} of ${total} words tapped` + (S.refNote ? ". " + S.refNote : "");
   $("tapBtn").textContent = S.tapping ? "Stop tapping" : "Start tapping";
   $("tapBtn").classList.toggle("primary", S.tapping);
 }
 $("refWords").addEventListener("click", (e) => {
-  const w = e.target.closest(".w"); if (!w) return;
+  const w = e.target.closest(".w"); if (!w || !S.song.audio) return;
   S.cursor = { line: Number(w.dataset.l), unit: Number(w.dataset.k) };
   S.tapping = true;
   const ref = S.ref[S.cursor.line];

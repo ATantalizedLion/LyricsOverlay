@@ -184,12 +184,15 @@ def test_lab_end_to_end(lab_server):
     cached = json.loads((entry / "lyrics.lrc").read_text())
     assert cached["synced_lyrics"][0]["segments"][0]["start_ms"] == 1000
     assert (entry / "lyrics.lrc.bak").exists()
+    from align import overlay_info
+    assert overlay_info(entry) == {"shift_applied_ms": 0, "source": "lab"}
     # The lab still works from the original line timing after applying.
     song = json.loads(call(f"{base}/api/song/{sid}")[2])
     assert song["applied"]["run_id"] == run_id
     assert "segments" not in song["lines"][0]
     call(f"{base}/api/song/{sid}/apply", "POST", {})
     assert "segments" not in json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]
+    assert overlay_info(entry) is None
 
     call(f"{base}/api/song/{sid}/reference", "PUT", {"words": {"0": [1000, None]}})
     assert json.loads(call(f"{base}/api/song/{sid}")[2])["reference"]["words"] == {"0": [1000, None]}
@@ -276,7 +279,12 @@ def test_lab_deletes_all_recordings(lab_server):
     from align import lab_dir
     assert not (lab_dir(entry) / "vocals").exists()
     assert (lab_dir(entry) / "runs" / f"{run_id}.json").exists()
-    assert json.loads(call(f"{base}/api/songs")[2]) == []
+    # The song keeps its runs, so it stays listed (without audio) for reviewing them.
+    songs = json.loads(call(f"{base}/api/songs")[2])
+    assert [(s["id"], s["source"]) for s in songs] == [(entry.name, None)]
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/song/{urllib.request.quote(entry.name)}/runs", "POST", {"configs": [{}]})
+    assert e.value.code == 400
 
 
 def test_lab_batches(lab_server, monkeypatch):
@@ -308,6 +316,49 @@ def test_lab_batches(lab_server, monkeypatch):
         assert json.loads((e / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"][0]["start_ms"] == 1400
     assert json.loads(call(f"{base}/api/batch/delete", "POST", {"batch": batch})[2]) == {"deleted": 2}
     assert not any(s["run_list"] for s in json.loads(call(f"{base}/api/library")[2])["songs"])
+
+
+def test_reference_follows_lines_when_lyrics_change():
+    from lab import remap_reference
+
+    def lines(*texts):
+        return [{"text": t, "units": [{"text": w} for w in t.split()]} for t in texts]
+
+    ref = {"words": {"0": [1000, 1300], "1": [4000, None], "2": [8000]},
+           "texts": {"0": "hello world", "1": "never again", "2": "ok"}}
+    # A line was added at the top and "never again" was removed.
+    out = remap_reference(ref, lines("intro", "hello world", "ok"))
+    assert out["words"] == {"1": [1000, 1300], "2": [8000]}
+    assert out["texts"] == {"1": "hello world", "2": "ok"}
+    # Unchanged lyrics leave it alone; old references without texts are kept as they are.
+    assert remap_reference(ref, lines("hello world", "never again", "ok"))["words"] == ref["words"]
+    assert remap_reference({"words": {"0": [1]}}, lines("x")) == {"words": {"0": [1]}}
+
+
+def test_lab_cache_can_be_cleared(lab_server):
+    from align import lab_dir
+
+    base, entry = lab_server
+    vocals = lab_dir(entry) / "vocals" / "htdemucs.wav"
+    vocals.parent.mkdir(parents=True)
+    vocals.write_bytes(b"x" * 2_000_000)
+    (lab_dir(entry) / "runs").mkdir()
+    (lab_dir(entry) / "runs" / "r.json").write_text("{}")
+    assert json.loads(call(f"{base}/api/cache")[2]) == {"mb": 2, "songs": 1}
+    assert json.loads(call(f"{base}/api/cache/clear", "POST", {})[2]) == {"mb": 2, "songs": 1}
+    assert not vocals.exists() and (lab_dir(entry) / "runs" / "r.json").exists()
+
+
+def test_job_history_is_capped(monkeypatch):
+    import lab
+
+    monkeypatch.setattr(lab, "MAX_FINISHED_JOBS", 3)
+    jobs = lab.Jobs.__new__(lab.Jobs)  # no worker thread
+    jobs.jobs, jobs.lock, jobs.queue = {}, threading.Lock(), __import__("queue").Queue()
+    for _ in range(6):
+        job = jobs.submit("song", RunConfig(), "x")
+        job["status"] = "done"
+    assert len(jobs.jobs) == 4  # 3 finished kept + the newest
 
 
 def test_auto_shift_matches_singing_to_the_lrc():

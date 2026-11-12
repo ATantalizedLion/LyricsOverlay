@@ -106,13 +106,19 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
 - **Score** runs by tapping along to a few lines (Reference timing: press Space at the
   start of each word). Every run then gets its median error against your taps, its bias
   (consistently early or late, which an offset fixes) and the share of words within 100 ms.
+  Taps are kept relative to the recording, so they stay valid whatever audio shift you
+  listen with, and follow their lines if the song's lyrics change.
 - **Use in overlay** writes a run's timing into the overlay's lyrics cache.
   **Use as default** saves the current settings for `align.py --pending`, so once you've
   found settings you like, batch-processing uses them.
 - **Library** (pick "Library" at the top): **Run on all songs** runs the current settings
   on every recorded song as one batch. Batches are compared on the share of lines timed,
   confidence and *shift* (how far singing sits from the LRC line times), and **Use for
-  all** puts a whole batch into the overlay.
+  all** puts a whole batch into the overlay. Tick **Show** on the batches you want as
+  columns in the songs table. Songs whose recording was deleted stay listed (marked "no
+  audio") as long as they have runs or syllable timing, so you can still look at them.
+- **In overlay now**: timing the overlay already has that didn't come from a lab run
+  (e.g. from `align.py --pending`) shows up as a read-only run to compare against.
 - **Auto shift** (on by default): when a song's singing sits consistently early or late
   against the LRC line times, which happens when the overlay misjudged where in the song
   a recording started, the audio is shifted to match before aligning. Without it, line
@@ -120,10 +126,11 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
   shifted get a "shifted" tag; click it to listen with the same shift.
 - **Skip (backing vocals)** (on by default): text in parentheses, usually backing vocals
   or echoes, isn't forced onto the audio; its syllables are timed from their neighbours.
-- **Delete all recordings…** (top right) removes every recording the overlay made, plus
+- **Delete all recordings…** (in the library view) removes every recording the overlay made, plus
   the lab's vocals made from them and the "already tried" markers, so those songs get
   recorded again. It can also take out the syllable timing made from them, since the
-  overlay doesn't record songs that already have it.
+  overlay doesn't record songs that already have it. **Clear lab cache…** frees the space
+  taken by separated vocals and model output, keeping runs and references.
 
 The models you can choose from:
 
