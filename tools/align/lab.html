@@ -60,6 +60,8 @@ th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line
 th { color: var(--muted); font-weight: 500; font-size: 12px; position: sticky; top: 0; background: var(--bg); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.applied td:first-child { box-shadow: inset 3px 0 var(--good); }
+td button { padding: 2px 7px; font-size: 12px; }
+#runs td.settings, #batches td.settings { white-space: normal; min-width: 150px; }
 td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; }
 .tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 #lines { max-height: 420px; }
@@ -331,12 +333,14 @@ async function loadSongs() {
 const migrated = new Set();
 async function openSong(id, keepView = false) {
   if (!id) {
+    flushRef();
     S.song = null; store.set("song", ""); audio.pause();
     $("songView").hidden = true; $("noSong").hidden = false; $("songInfo").textContent = "";
     setLibraryMode(true);
     await loadLibrary(); return;
   }
   store.set("song", id);
+  flushRef();
   const song = await api(`/api/song/${enc(id)}`);
   const changed = !S.song || S.song.id !== id;
   S.song = song;
@@ -355,7 +359,7 @@ async function openSong(id, keepView = false) {
   }
   if (changed) {
     S.compare = store.get("compare:" + id, null) || song.runs.slice(-3).map((r) => r.id);
-    S.cursor = { line: firstLineWithUnits(0), unit: 0 }; S.tapHistory = [];
+    S.cursor = { line: firstLineWithUnits(0), unit: 0 }; S.tapHistory = []; S.tapping = false;
   }
   S.compare = S.compare.filter((rid) => song.runs.some((r) => r.id === rid));
   assignColors(song);
@@ -405,7 +409,7 @@ function assignColors(song) {
 function refreshSourceOptions() {
   const sel = $("source"), cur = sel.value;
   sel.innerHTML = `<option value="mix">Song (mix)</option>` +
-    S.song.vocals.map((v) => `<option value="vocals:${esc(v)}">Vocals: ${esc(S.options.separators[v] ? v : v)}</option>`).join("");
+    S.song.vocals.map((v) => `<option value="vocals:${esc(v)}">Vocals: ${esc(v.replace(/^uvr:/, "").replace(/\.(ckpt|onnx)$/, ""))}</option>`).join("");
   sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "mix";
 }
 function setupSources() {
@@ -503,7 +507,7 @@ function renderRuns() {
       return `<tr class="${applied === r.id ? "applied" : ""}" data-id="${r.id}">
         <td><input type="checkbox" data-act="cmp" ${on ? "checked" : ""} title="Compare"> <span class="sw" style="background:${S.colorOf[r.id]}"></span></td>
         <td>${name}${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}${st.shift_applied_ms ? ` <span class="tag" data-act="shift" style="cursor:pointer" title="This run shifted the audio by ${st.shift_applied_ms} ms to match the LRC. Click to listen with the same shift.">shifted ${st.shift_applied_ms > 0 ? "+" : ""}${st.shift_applied_ms} ms</span>` : ""}</td>
-        <td class="muted" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
+        <td class="muted settings" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
         <td class="num">${st.aligned}/${st.lines}</td>
         <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}${mixed && !r.readonly ? ` <span class="tag" title="Confidence is only comparable between runs with the same aligner">${esc(c.aligner)}</span>` : ""}</td>
         <td class="num">${fmtShift(st)}</td>
@@ -527,7 +531,8 @@ $("runs").addEventListener("click", async (e) => {
   } else if (act === "load") {
     S.cfg = { ...S.options.builtin, ...run.config }; writeForm(S.cfg); store.set("cfg", S.cfg);
   } else if (act === "apply") {
-    await api(`/api/song/${enc(S.song.id)}/apply`, { method: "POST", body: { run_id: id } });
+    if (!run.stats.aligned && !confirm(`“${run.label}” timed no lines. Using it removes the syllable timing this song has now. Go ahead?`)) return;
+    try { await api(`/api/song/${enc(S.song.id)}/apply`, { method: "POST", body: { run_id: id } }); } catch (err) { alert(err.message); return; }
     await openSong(S.song.id, true);
   } else if (act === "unapply") {
     await api(`/api/song/${enc(S.song.id)}/apply`, { method: "POST", body: {} });
@@ -619,7 +624,7 @@ function renderLibrary() {
   picked = picked ? picked.filter((id) => batches.some((b) => b.id === id)) : batches.slice(0, 5).map((b) => b.id);
   S.shownBatches = picked;
   $("batches").innerHTML = batches.length ? `<tr><th title="Show as a column in the songs table below">Show</th><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
-    batches.map((b) => `<tr data-batch="${b.id}"><td><input type="checkbox" data-act="show" ${picked.includes(b.id) ? "checked" : ""}></td><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
+    batches.map((b) => `<tr data-batch="${b.id}"><td><input type="checkbox" data-act="show" ${picked.includes(b.id) ? "checked" : ""}></td><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted settings">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
       <td class="num">${b.songs}</td><td class="num ${b.timed === best ? "good" : ""}">${Math.round(b.timed * 100)}%</td>
       <td class="num">${b.conf == null ? "–" : b.conf.toFixed(2)}${mixed ? ` <span class="tag" title="Confidence is only comparable between batches with the same aligner">${esc(b.config.aligner)}</span>` : ""}</td>
       <td class="num">${b.shift == null ? "–" : (b.shift > 0 ? "+" : "") + b.shift + " ms"}<span class="muted"> (|${b.absShift ?? "–"}|)</span></td>
@@ -648,14 +653,17 @@ $("batches").addEventListener("click", async (e) => {
   }
   if (act === "settings") { S.cfg = { ...S.options.builtin, ...b.config }; writeForm(S.cfg); store.set("cfg", S.cfg); }
   if (act === "apply") {
-    if (!confirm(`Use “${b.label}” in the overlay for all ${b.songs} songs? Each song's lyrics keep a backup of their original timing.`)) return;
-    const r = await api("/api/batch/apply", { method: "POST", body: { batch: id } });
-    alert(`The overlay now uses “${b.label}” for ${r.applied} songs. It shows up the next time each song starts.`);
+    if (!confirm(`Use “${b.label}” in the overlay for the ${b.songs} songs in it? Songs where it timed no lines keep their current timing. Each song's lyrics keep a backup of their original timing.`)) return;
+    try {
+      const r = await api("/api/batch/apply", { method: "POST", body: { batch: id } });
+      alert((r.applied ? `The overlay now uses “${b.label}” for ${r.applied} song${r.applied === 1 ? "" : "s"}. It shows up the next time each song starts.` : "Nothing changed.") +
+        (r.skipped.length ? `\n\nLeft ${r.skipped.length} as they were:\n` + r.skipped.map((x) => `${x.song}: ${x.why}`).join("\n") : ""));
+    } catch (err) { alert(err.message); }
     await loadLibrary();
   }
   if (act === "del") {
     if (!confirm(`Delete batch “${b.label}” (${b.songs} runs)?`)) return;
-    await api("/api/batch/delete", { method: "POST", body: { batch: id } });
+    await api("/api/batch/delete", { method: "POST", body: { batch: id } }).catch((err) => alert(err.message));
     await loadLibrary();
   }
 });
@@ -873,11 +881,21 @@ $("refWords").addEventListener("click", (e) => {
 });
 $("tapBtn").onclick = () => { S.tapping = !S.tapping; if (S.tapping && audio.paused) { seek(S.song.lines[S.cursor.line].time_ms - 1500); } renderRef(); };
 $("clearLineBtn").onclick = () => { delete S.ref[S.cursor.line]; S.cursor.unit = 0; saveRef(); renderRef(); renderRuns(); renderLines(); draw(); };
-let refSaveTimer = null;
+let pendingRef = null;
 function saveRef() {
-  clearTimeout(refSaveTimer);
-  refSaveTimer = setTimeout(() => api(`/api/song/${enc(S.song.id)}/reference`, { method: "PUT", body: { words: S.ref } }).catch((e) => alert("Couldn't save reference: " + e.message)), 600);
+  // Bound to this song now: switching songs before the save fires must not lose the taps
+  // or write them to the other song.
+  if (pendingRef && pendingRef.song !== S.song.id) flushRef();
+  clearTimeout(pendingRef?.timer);
+  pendingRef = { song: S.song.id, words: S.ref, timer: setTimeout(flushRef, 600) };
 }
+function flushRef() {
+  if (!pendingRef) return;
+  const { song, words, timer } = pendingRef;
+  clearTimeout(timer); pendingRef = null;
+  api(`/api/song/${enc(song)}/reference`, { method: "PUT", body: { words } }).catch((e) => alert("Couldn't save reference: " + e.message));
+}
+window.addEventListener("beforeunload", flushRef);
 function tap() {
   const lines = S.song.lines;
   const { line, unit } = S.cursor;
@@ -1074,7 +1092,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key;
   if (S.tapping && (k === " " || k === "j" || k === "J")) { e.preventDefault(); if (!e.repeat) tap(); return; }
   if (S.tapping && k === "Backspace") { e.preventDefault(); untap(); return; }
-  if (k === " " || (S.tapping && (k === "p" || k === "P"))) { e.preventDefault(); audio.paused ? audio.play() : audio.pause(); return; }
+  if (k === " " || (S.tapping && (k === "p" || k === "P"))) { e.preventDefault(); if (S.song.audio) audio.paused ? audio.play().catch(() => {}) : audio.pause(); return; }
   if (k === "ArrowLeft") { e.preventDefault(); seek(songMs() - 2000); }
   if (k === "ArrowRight") { e.preventDefault(); seek(songMs() + 2000); }
   if (k === "[" || k === "]") {

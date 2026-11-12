@@ -311,11 +311,43 @@ def test_lab_batches(lab_server, monkeypatch):
     assert all(r["stats"]["lrc_shift_ms"] == 400 and r["stats"]["lrc_shift_spread_ms"] == 0 for r in runs)
     assert "lines" not in runs[0]
 
-    assert json.loads(call(f"{base}/api/batch/apply", "POST", {"batch": batch})[2]) == {"applied": 2}
+    assert json.loads(call(f"{base}/api/batch/apply", "POST", {"batch": batch})[2]) == {"applied": 2, "skipped": []}
     for e in (entry, second):
         assert json.loads((e / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"][0]["start_ms"] == 1400
     assert json.loads(call(f"{base}/api/batch/delete", "POST", {"batch": batch})[2]) == {"deleted": 2}
     assert not any(s["run_list"] for s in json.loads(call(f"{base}/api/library")[2])["songs"])
+
+
+def test_lab_apply_guards(lab_server):
+    import lab
+    from align import lab_dir, write_cache_lines
+
+    base, entry = lab_server
+    runs = lab_dir(entry) / "runs"
+    runs.mkdir(parents=True)
+    good = {"id": "good", "batch": "b", "label": "good", "stats": {"aligned": 1, "shift_applied_ms": -300},
+            "lines": [dict(l, segments=[{"text": l["text"], "start_ms": l["time_ms"], "end_ms": l["time_ms"] + 400}])
+                      for l in LINES]}
+    (runs / "good.json").write_text(json.dumps(good))
+    assert lab.apply_batch("b") == {"applied": 1, "skipped": []}
+    assert (lab_dir(entry) / "applied.json").exists()
+
+    # A batch run that timed nothing leaves the song's timing alone.
+    empty = {**good, "id": "empty", "batch": "e", "stats": {"aligned": 0}, "lines": LINES}
+    (runs / "empty.json").write_text(json.dumps(empty))
+    assert lab.apply_batch("e") == {"applied": 0, "skipped": [{"song": "Song", "why": "no lines timed"}]}
+    assert json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"]
+
+    # Timing written by align.py replaces the lab run as what the overlay shows.
+    write_cache_lines(entry, good["lines"], 0, "align.py")
+    assert not (lab_dir(entry) / "applied.json").exists()
+
+    # A run made before the lyrics changed isn't written back over them.
+    stale = {**good, "id": "stale", "lines": good["lines"][:2]}
+    (runs / "stale.json").write_text(json.dumps(stale))
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/song/{urllib.request.quote(entry.name)}/apply", "POST", {"run_id": "stale"})
+    assert e.value.code == 400
 
 
 def test_reference_follows_lines_when_lyrics_change():

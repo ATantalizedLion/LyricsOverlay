@@ -181,6 +181,9 @@ def write_cache_lines(entry: Path, lines: list[dict], shift_ms: int = 0, source:
         shutil.copyfile(lyrics_file, backup)
     song["synced_lyrics"] = to_cache_lines(lines)
     lyrics_file.write_text(json.dumps(song, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Whatever wrote this, a lab run applied earlier is no longer what the overlay shows
+    # (the lab writes applied.json again right after, when it's the one applying).
+    (lab_dir(entry) / "applied.json").unlink(missing_ok=True)
     info = lab_dir(entry) / OVERLAY_INFO
     if any(l.get("segments") for l in lines):
         info.parent.mkdir(parents=True, exist_ok=True)

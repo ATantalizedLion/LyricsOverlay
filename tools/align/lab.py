@@ -375,14 +375,33 @@ def batch_runs(batch: str) -> list[tuple[Path, Path, dict]]:
     return out
 
 
-def apply_batch(batch: str) -> int:
-    applied = 0
+def stale_run(entry: Path, run: dict) -> bool:
+    """True if the song's lyrics changed since the run, so writing it would bring back
+    the old lines."""
+    return [l["text"] for l in run["lines"]] != [l["text"] for l in original_lines(entry)]
+
+
+def apply_run(entry: Path, run: dict) -> None:
+    if stale_run(entry, run):
+        raise ValueError("The lyrics of this song changed since this run. Run it again first.")
+    write_cache_lines(entry, run["lines"], run["stats"].get("shift_applied_ms") or 0, "lab")
+    write_json(lab_dir(entry) / "applied.json", {"run_id": run["id"], "label": run.get("label"), "at": time.time()})
+
+
+def apply_batch(batch: str) -> dict:
+    """Puts each song's run from `batch` into the overlay, except runs that timed no
+    lines (they would wipe out whatever timing the song has) or whose lyrics changed."""
+    applied, skipped = 0, []
     for entry, _, run in batch_runs(batch):
-        write_cache_lines(entry, run["lines"], run["stats"].get("shift_applied_ms") or 0, "lab")
-        write_json(lab_dir(entry) / "applied.json",
-                   {"run_id": run["id"], "label": run.get("label"), "at": time.time()})
-        applied += 1
-    return applied
+        name = read_json(entry / ".meta", {}).get("track_name", entry.name)
+        if not run["stats"].get("aligned"):
+            skipped.append({"song": name, "why": "no lines timed"})
+        elif stale_run(entry, run):
+            skipped.append({"song": name, "why": "lyrics changed since the run"})
+        else:
+            apply_run(entry, run)
+            applied += 1
+    return {"applied": applied, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +419,7 @@ class Jobs:
         self.queue: queue.Queue = queue.Queue()
         self.jobs: dict[str, dict] = {}
         self.lock = threading.Lock()
+        self.deleted_batches: set[str] = set()
         threading.Thread(target=self._work, daemon=True).start()
 
     def submit(self, song: str, cfg: RunConfig, label: str, batch: str | None = None) -> dict:
@@ -457,7 +477,7 @@ class Jobs:
                 job["status"] = "error"
                 log(f"Failed: {job['error']}")
 
-    def _run(self, job: dict, log) -> str:
+    def _run(self, job: dict, log) -> str | None:
         entry = entry_path(job["song"])
         audio, offset = audio_source(entry)
         if audio is None:
@@ -471,6 +491,9 @@ class Jobs:
         run_id = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
         result.update(id=run_id, label=job["label"] or cfg.summary(), created=time.time(),
                       batch=job.get("batch"))
+        if job.get("batch") in self.deleted_batches:
+            log("Its batch was deleted meanwhile, so the run isn't kept.")
+            return None
         write_json(lab_dir(entry) / "runs" / f"{run_id}.json", result)
         return run_id
 
@@ -646,6 +669,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(clear_caches())
             return
         if parts == ["api", "recordings", "delete"]:
+            if any(j["status"] == "running" for j in self.jobs.list()):
+                raise ValueError("A run is using the recordings right now. Cancel the queue and wait for it to finish first.")
+            self.jobs.cancel_queued()
             self._json(delete_recordings(bool(body.get("clear_timing"))))
             return
         if parts == ["api", "batch"]:
@@ -666,10 +692,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"batch": batch, "jobs": len(songs), "skipped": skipped})
             return
         if parts == ["api", "batch", "apply"]:
-            self._json({"applied": apply_batch(str(body.get("batch")))})
+            self._json(apply_batch(str(body.get("batch"))))
             return
         if parts == ["api", "batch", "delete"]:
             self.jobs.cancel_queued(str(body.get("batch")))
+            self.jobs.deleted_batches.add(str(body.get("batch")))
             runs = batch_runs(str(body.get("batch")))
             for _, f, _ in runs:
                 f.unlink(missing_ok=True)
@@ -716,8 +743,7 @@ class Handler(BaseHTTPRequestHandler):
                 run = read_json(lab / "runs" / f"{safe_id(run_id)}.json")
                 if not run:
                     raise LookupError("no such run")
-                write_cache_lines(entry, run["lines"], run["stats"].get("shift_applied_ms") or 0, "lab")
-                write_json(lab / "applied.json", {"run_id": run_id, "label": run.get("label"), "at": time.time()})
+                apply_run(entry, run)
             else:
                 # Back to plain line timing.
                 write_cache_lines(entry, original_lines(entry))
