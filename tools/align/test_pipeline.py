@@ -497,3 +497,46 @@ def test_lab_rejects_requests_from_other_sites(lab_server):
         call(f"{base}/api/songs", headers={"Host": "evil.example:80"})
     assert e.value.code == 403
     assert call(f"{base}/api/songs", headers={"Origin": base})[0] == 200
+
+
+def test_testset_import_scores_batches(lab_server, monkeypatch):
+    import lab
+    import testset
+
+    base, entry = lab_server
+    monkeypatch.setattr(lab, "cached_recording_problem", lambda e: None)
+    root = entry.parent.parent.parent / "jamendo"
+    for sub in ("mp3", "annotations/lines", "annotations/words", "lyrics"):
+        (root / sub).mkdir(parents=True)
+    sf.write(root / "mp3" / "Band_-_Tune.wav", encode(EVENTS, DURATION), 16_000, subtype="FLOAT")
+    (root / "JamendoLyrics.csv").write_text(
+        "Filepath,Artist,Title,Language,LicenseType\nBand_-_Tune.wav,Band,Tune,English,CC BY\n")
+    (root / "annotations" / "lines" / "Band_-_Tune.csv").write_text(
+        "start_time,end_time,lyrics_line\n" + "".join(f'{t / 1000},{t / 1000 + 1},"{x}"\n' for t, x in EVENTS))
+    # The annotation splits "never-again" the way the lyrics don't, and has one word untimed.
+    words = [("hello", 1.0), ("world", 1.4), ("never", 4.0), ("again", float("nan")), ("ok", 8.0)]
+    (root / "lyrics" / "Band_-_Tune.words.txt").write_text("\n".join(w for w, _ in words) + "\n")
+    (root / "annotations" / "words" / "Band_-_Tune.csv").write_text(
+        "word_start,word_end,line_end\n" + "".join(f"{t},{t},nan\n" for _, t in words))
+
+    row = {"Filepath": "Band_-_Tune.wav", "Artist": "Band", "Title": "Tune", "Language": "English"}
+    name = testset.import_song(root, row)
+    song = json.loads(call(f"{base}/api/song/{urllib.request.quote(name)}")[2])
+    assert song["reference"]["words"] == {"0": [1000, 1400], "1": [4000, None], "2": [8000]}
+    assert song["audio"]["kind"] == "file"
+    with pytest.raises(urllib.error.HTTPError) as e:  # hand timing can't be overwritten
+        call(f"{base}/api/song/{urllib.request.quote(name)}/reference", "PUT", {"words": {}})
+    assert e.value.code == 400
+
+    call(f"{base}/api/batch", "POST", {"config": {"unit": "word", "offset_ms": 100}})
+    for _ in range(200):
+        state = json.loads(call(f"{base}/api/jobs")[2])
+        if state and all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    lib = json.loads(call(f"{base}/api/library")[2])
+    tune = next(s for s in lib["songs"] if s["id"] == name)
+    assert tune["test_set"] == "JamendoLyrics"
+    score = tune["run_list"][0]["score"]
+    assert score["n"] == 4 and score["median"] == 100 and score["bias"] > 0
+    assert testset.remove_all() == 1

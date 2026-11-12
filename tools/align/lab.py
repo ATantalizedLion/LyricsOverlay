@@ -33,7 +33,7 @@ from align import (ATTEMPTED_MARKER, RECORDING_FILE, cache_root, data_dir, find_
                    overlay_info, read_tags, recording_offset_ms, recording_problem, write_cache_lines)
 from pipeline import (ALIGNERS, SEPARATORS, ModelPool, RunConfig, defaults_file, load_defaults,
                       run_alignment, vocals_cache_path)
-from text import split_units
+from testset import line_units
 
 HERE = Path(__file__).resolve().parent
 PAGE = HERE / "lab.html"
@@ -108,6 +108,7 @@ def list_songs() -> list[dict]:
             "runs": len(runs),
             "has_reference": (lab / "reference.json").exists(),
             "aligned_in_overlay": any(l.get("segments") for l in current),
+            "test_set": meta.get("test_set"),
             "source": None if audio is None else "recording" if audio.name == RECORDING_FILE else "file",
         })
     songs.sort(key=lambda s: (s["artist"].casefold(), s["title"].casefold()))
@@ -196,12 +197,7 @@ def song_detail(name: str) -> dict:
     audio, offset = audio_source(entry)
     lines = original_lines(entry)
     for line in lines:
-        units, pos = [], 0
-        for u in split_units(line["text"]):
-            if u.strip():
-                units.append({"offset": pos, "text": u})
-            pos += len(u)
-        line["units"] = units
+        line["units"] = line_units(line["text"])
     runs = []
     for f in run_files(lab):
         run = read_json(f)
@@ -228,6 +224,55 @@ def song_detail(name: str) -> dict:
         "applied": applied,
         "vocals": vocals,
     }
+
+
+def unit_starts(units: list[dict], run_line: dict | None) -> list[int | None]:
+    """Start time of each word of a line in a run (from the syllable that word starts in),
+    or None where the run has no timing. Same as unitStarts in lab.html."""
+    segs = (run_line or {}).get("segments") or []
+    if not segs:
+        return [None] * len(units)
+    starts, pos = [], 0
+    for s in segs:
+        starts.append((pos, s["start_ms"]))
+        pos += len(s["text"])
+    out = []
+    for u in units:
+        best = None
+        for p, ms in starts:
+            if p <= u["offset"]:
+                best = ms
+            else:
+                break
+        out.append(best)
+    return out
+
+
+def score_run(run: dict, lines: list[dict], ref_words: dict) -> dict | None:
+    """A run's word start errors against a reference (see scoreRun in lab.html): median
+    absolute error, mean signed error (bias), share within 100 ms and share timed."""
+    shift = run.get("stats", {}).get("shift_applied_ms") or 0
+    errs, n = [], 0
+    for key, taps in ref_words.items():
+        li = int(key)
+        if li >= len(lines) or li >= len(run.get("lines", [])):
+            continue
+        got = unit_starts(lines[li]["units"], run["lines"][li])
+        for k, r in enumerate(taps):
+            if r is None or k >= len(got):
+                continue
+            n += 1
+            if got[k] is not None:
+                errs.append(got[k] - shift - r)
+    if not n:
+        return None
+    ab = sorted(abs(e) for e in errs)
+    return {"n": n, "median": ab[len(ab) // 2] if ab else None,
+            "bias": round(sum(errs) / len(errs)) if errs else None,
+            "within": sum(e <= 100 for e in ab) / n, "timed": len(errs) / n}
+
+
+_score_cache: dict[tuple, dict | None] = {}
 
 
 def remap_reference(ref: dict | None, lines: list[dict]) -> dict | None:
@@ -361,7 +406,26 @@ def library() -> dict:
     for song in list_songs():
         entry = cache_root() / song["id"]
         lab = lab_dir(entry)
-        runs = [r for r in map(cached_run_summary, run_files(lab)) if r]
+        pairs = [(f, r) for f in run_files(lab) if (r := cached_run_summary(f))]
+        runs = [r for _, r in pairs]
+        ref_file = lab / "reference.json"
+        if ref_file.exists() and pairs:
+            # Score every run against the reference, once per run and reference version.
+            lines = original_lines(entry)
+            for line in lines:
+                line["units"] = line_units(line["text"])
+            ref = None
+            rst = ref_file.stat()
+            runs = []
+            for f, summary in pairs:
+                st = f.stat()
+                key = (str(f), st.st_mtime_ns, st.st_size, rst.st_mtime_ns, rst.st_size)
+                if key not in _score_cache:
+                    if ref is None:
+                        ref = (remap_reference(read_json(ref_file), lines) or {}).get("words") or {}
+                    run = read_json(f)
+                    remember(_score_cache, key, score_run(run, lines, ref) if run else None, 5000)
+                runs.append(dict(summary, score=_score_cache[key]))
         song["run_list"] = sorted(runs, key=lambda r: r.get("created", 0))
         song["applied"] = applied_run(lab)
         songs.append(song)
@@ -738,6 +802,8 @@ class Handler(BaseHTTPRequestHandler):
                 jobs.append(self.jobs.submit(song, cfg, labels[i] if i < len(labels) else ""))
             self._json({"jobs": jobs})
         elif action == "reference":
+            if (read_json(lab / "reference.json") or {}).get("locked"):
+                raise ValueError("This song's reference is hand-annotated and can't be changed.")
             words = body.get("words", {})
             lines = original_lines(entry)
             texts = {k: lines[int(k)]["text"] for k in words if k.isdigit() and int(k) < len(lines)}

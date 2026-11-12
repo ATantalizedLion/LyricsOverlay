@@ -608,7 +608,12 @@ function batchesOf(lib) {
     const lines = b.runs.reduce((a, x) => a + x.run.stats.lines, 0), aligned = b.runs.reduce((a, x) => a + x.run.stats.aligned, 0);
     const confs = b.runs.map((x) => x.run.stats.mean_confidence).filter((v) => v != null);
     const shifts = b.runs.map((x) => x.run.stats.lrc_shift_ms).filter((v) => v != null);
-    return { ...b, songs: b.runs.length, timed: lines ? aligned / lines : 0,
+    const scored = b.runs.map((x) => x.run.score).filter((sc) => sc && sc.n);
+    const refWords = scored.reduce((a, sc) => a + sc.n, 0);
+    return { ...b, songs: b.runs.length, refSongs: scored.length,
+      err: median(scored.map((sc) => sc.median).filter((v) => v != null)),
+      bias: median(scored.map((sc) => sc.bias).filter((v) => v != null)),
+      within: refWords ? scored.reduce((a, sc) => a + sc.within * sc.n, 0) / refWords : null, timed: lines ? aligned / lines : 0,
       conf: confs.length ? confs.reduce((a, c) => a + c, 0) / confs.length : null,
       shift: median(shifts), absShift: median(shifts.map(Math.abs)),
       offSongs: b.runs.filter((x) => Math.abs(x.run.stats.lrc_shift_ms ?? 0) > 300 && (x.run.stats.lrc_shift_spread_ms ?? 1e9) < Math.abs(x.run.stats.lrc_shift_ms) / 2).length };
@@ -621,15 +626,18 @@ function renderLibrary() {
   $("batchInfo").textContent = pending ? `${pending} song${pending === 1 ? "" : "s"} still to process…` : `${lib.songs.length} songs`;
   const best = Math.max(...batches.map((b) => b.timed));
   const mixed = new Set(batches.map((b) => b.config.aligner)).size > 1;
+  const anyRef = batches.some((b) => b.refSongs);
+  const bestErr = Math.min(...batches.map((b) => b.err).filter((v) => v != null));
   // Remember which batches were hidden (not which were shown), so new batches always appear.
   const hidden = new Set(store.get("hiddenBatches", []));
   const picked = batches.filter((b) => !hidden.has(b.id)).map((b) => b.id);
-  $("batches").innerHTML = batches.length ? `<tr><th title="Show as a column in the songs table below">Show</th><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
+  $("batches").innerHTML = batches.length ? `<tr><th title="Show as a column in the songs table below">Show</th><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th>${anyRef ? `<th class="num" title="Against the songs with a reference (your taps or a hand-timed test song): median of each song's median word error">Error</th><th class="num" title="Median of each song's average offset; positive means late">Bias</th><th class="num" title="Share of all reference words within 100 ms">±100</th>` : ""}<th></th></tr>` +
     batches.map((b) => `<tr data-batch="${b.id}"><td><input type="checkbox" data-act="show" ${picked.includes(b.id) ? "checked" : ""}></td><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted settings">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
       <td class="num">${b.songs}</td><td class="num ${b.timed === best ? "good" : ""}">${Math.round(b.timed * 100)}%</td>
       <td class="num">${b.conf == null ? "–" : b.conf.toFixed(2)}${mixed ? ` <span class="tag" title="Confidence is only comparable between batches with the same aligner">${esc(b.config.aligner)}</span>` : ""}</td>
       <td class="num">${b.shift == null ? "–" : (b.shift > 0 ? "+" : "") + b.shift + " ms"}<span class="muted"> (|${b.absShift ?? "–"}|)</span></td>
       <td class="num ${b.offSongs ? "warn" : ""}">${b.offSongs}</td>
+      ${anyRef ? (b.refSongs ? `<td class="num ${b.err === bestErr ? "good" : ""}" title="${b.refSongs} song${b.refSongs === 1 ? "" : "s"} with a reference">${b.err == null ? "–" : Math.round(b.err) + " ms"}</td><td class="num">${b.bias == null ? "–" : (b.bias > 0 ? "+" : "") + Math.round(b.bias) + " ms"}</td><td class="num">${b.within == null ? "–" : Math.round(b.within * 100) + "%"}</td>` : `<td class="num muted">–</td><td></td><td></td>`) : ""}
       <td><button data-act="settings">Settings</button> <button data-act="apply" title="Write this batch's timing into the overlay for every song in it">Use for all</button> <button data-act="del">✕</button></td></tr>`).join("")
     : `<tr><td class="muted" style="padding:14px">No batches yet. Pick settings on the left and press “Run on all songs”.</td></tr>`;
   const shown = batches.filter((b) => picked.includes(b.id));
@@ -638,9 +646,10 @@ function renderLibrary() {
       const cells = shown.map((b) => {
         const x = b.runs.find((r) => r.song === song.id); if (!x) return `<td class="num muted">–</td>`;
         const st = x.run.stats;
-        return `<td class="num" title="confidence ${st.mean_confidence ?? "–"}, shift ${st.lrc_shift_ms ?? "–"} ms">${st.aligned}/${st.lines} · ${fmtShift(st)}</td>`;
+        const sc = x.run.score;
+        return `<td class="num" title="confidence ${st.mean_confidence ?? "–"}, shift ${st.lrc_shift_ms ?? "–"} ms">${st.aligned}/${st.lines} · ${sc && sc.median != null ? `err ${Math.round(sc.median)} ms` : fmtShift(st)}</td>`;
       }).join("");
-      return `<tr data-song="${esc(song.id)}" style="cursor:pointer"><td>${esc(song.artist)} – ${esc(song.title)}${song.source ? "" : ' <span class="tag" title="The recording was deleted. Runs and timing can still be looked at, but not played or rerun.">no audio</span>'}</td>
+      return `<tr data-song="${esc(song.id)}" style="cursor:pointer"><td>${esc(song.artist)} – ${esc(song.title)}${song.test_set ? ` <span class="tag" title="Hand-timed test song: its reference is the annotated word timing">${esc(song.test_set)}</span>` : ""}${song.source ? "" : ' <span class="tag" title="The recording was deleted. Runs and timing can still be looked at, but not played or rerun.">no audio</span>'}</td>
         <td class="muted">${song.applied ? esc(song.applied.label || "a run") : song.aligned_in_overlay ? "syllables (from align.py)" : "lines only"}</td>${cells}</tr>`;
     }).join("");
 }
@@ -868,12 +877,14 @@ function renderRef() {
   }).join("");
   const total = lines.reduce((a, l) => a + l.units.length, 0);
   const tapped = Object.values(S.ref).reduce((a, r) => a + r.filter((x) => x != null).length, 0);
-  $("refStats").textContent = `${tapped} of ${total} words tapped` + (S.refNote ? ". " + S.refNote : "");
+  const locked = !!S.song.reference?.locked;
+  $("tapBtn").hidden = $("clearLineBtn").hidden = locked;
+  $("refStats").textContent = locked ? `Hand-timed reference (${S.song.reference.source || "test set"}): ${tapped} of ${total} words timed. It can't be changed here.` : `${tapped} of ${total} words tapped` + (S.refNote ? ". " + S.refNote : "");
   $("tapBtn").textContent = S.tapping ? "Stop tapping" : "Start tapping";
   $("tapBtn").classList.toggle("primary", S.tapping);
 }
 $("refWords").addEventListener("click", (e) => {
-  const w = e.target.closest(".w"); if (!w || !S.song.audio) return;
+  const w = e.target.closest(".w"); if (!w || !S.song.audio || S.song.reference?.locked) return;
   S.cursor = { line: Number(w.dataset.l), unit: Number(w.dataset.k) };
   S.tapping = true;
   const ref = S.ref[S.cursor.line];
@@ -899,7 +910,7 @@ function flushRef() {
 }
 window.addEventListener("beforeunload", flushRef);
 function tap() {
-  if (!S.song.audio) return;
+  if (!S.song.audio || S.song.reference?.locked) return;
   const lines = S.song.lines;
   const { line, unit } = S.cursor;
   if (line >= lines.length || !lines[line].units.length) return;

@@ -132,6 +132,22 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
   overlay doesn't record songs that already have it. **Clear lab cache…** frees the space
   taken by separated vocals and model output, keeping runs and references.
 
+### Hand-timed test songs
+
+Your own taps are a slow way to get a reference. [JamendoLyrics](https://huggingface.co/datasets/jamendolyrics/jamendolyrics)
+has 79 Creative Commons songs (English, German, Spanish, French) with every word's start
+time annotated by hand. Download it, then import it:
+
+```
+uvx --from huggingface_hub hf download jamendolyrics/jamendolyrics --repo-type dataset --local-dir D:\Datasets\jamendolyrics
+uv run testset.py D:\Datasets\jamendolyrics            # or --lang en for the English songs only
+```
+
+Each song shows up in the lab (tagged JamendoLyrics) with its hand timing as a read-only
+reference, so every run gets Error, Bias and ±100 scores, and the library shows them per
+batch across all songs that have a reference. `uv run testset.py --remove` takes them out
+again.
+
 The models you can choose from:
 
 | Separator | |
