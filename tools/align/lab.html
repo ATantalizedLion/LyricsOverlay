@@ -345,7 +345,8 @@ async function openSong(id, keepView = false) {
   const changed = !S.song || S.song.id !== id;
   S.song = song;
   S.ref = (song.reference && song.reference.words) || {};
-  S.refNote = "";
+  S.refNote = song.reference?.dropped_lines
+    ? `The lyrics changed since you tapped: taps on ${song.reference.dropped_lines} line${song.reference.dropped_lines === 1 ? "" : "s"} that no longer exist were dropped.` : "";
   if (song.reference && !song.reference.frame && Object.keys(S.ref).length && !migrated.has(id)) {
     migrated.add(id);
     // Taps saved before they were kept relative to the recording include the audio shift
@@ -353,7 +354,7 @@ async function openSong(id, keepView = false) {
     const was = store.get("audioShift:" + id, 0) || 0;
     if (was) {
       for (const arr of Object.values(S.ref)) arr.forEach((v, k) => { if (v != null) arr[k] = v - was; });
-      S.refNote = `Your earlier taps were made with a ${was} ms audio shift and have been corrected for it.`;
+      S.refNote += `Your earlier taps were made with a ${was} ms audio shift and have been corrected for it.`;
     }
     saveRef();
   }
@@ -620,9 +621,9 @@ function renderLibrary() {
   $("batchInfo").textContent = pending ? `${pending} song${pending === 1 ? "" : "s"} still to process…` : `${lib.songs.length} songs`;
   const best = Math.max(...batches.map((b) => b.timed));
   const mixed = new Set(batches.map((b) => b.config.aligner)).size > 1;
-  let picked = store.get("shownBatches", null);
-  picked = picked ? picked.filter((id) => batches.some((b) => b.id === id)) : batches.slice(0, 5).map((b) => b.id);
-  S.shownBatches = picked;
+  // Remember which batches were hidden (not which were shown), so new batches always appear.
+  const hidden = new Set(store.get("hiddenBatches", []));
+  const picked = batches.filter((b) => !hidden.has(b.id)).map((b) => b.id);
   $("batches").innerHTML = batches.length ? `<tr><th title="Show as a column in the songs table below">Show</th><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
     batches.map((b) => `<tr data-batch="${b.id}"><td><input type="checkbox" data-act="show" ${picked.includes(b.id) ? "checked" : ""}></td><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted settings">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
       <td class="num">${b.songs}</td><td class="num ${b.timed === best ? "good" : ""}">${Math.round(b.timed * 100)}%</td>
@@ -648,8 +649,9 @@ $("batches").addEventListener("click", async (e) => {
   const id = e.target.closest("tr").dataset.batch;
   const b = batchesOf(S.lib).find((x) => x.id === id);
   if (act === "show") {
-    const ids = e.target.checked ? [...S.shownBatches, id] : S.shownBatches.filter((x) => x !== id);
-    store.set("shownBatches", ids); renderLibrary(); return;
+    const hidden = new Set(store.get("hiddenBatches", []).filter((x) => S.lib && batchesOf(S.lib).some((b) => b.id === x)));
+    if (e.target.checked) hidden.delete(id); else hidden.add(id);
+    store.set("hiddenBatches", [...hidden]); renderLibrary(); return;
   }
   if (act === "settings") { S.cfg = { ...S.options.builtin, ...b.config }; writeForm(S.cfg); store.set("cfg", S.cfg); }
   if (act === "apply") {
@@ -897,6 +899,7 @@ function flushRef() {
 }
 window.addEventListener("beforeunload", flushRef);
 function tap() {
+  if (!S.song.audio) return;
   const lines = S.song.lines;
   const { line, unit } = S.cursor;
   if (line >= lines.length || !lines[line].units.length) return;
@@ -1088,7 +1091,8 @@ function frame() {
   requestAnimationFrame(frame);
 }
 document.addEventListener("keydown", (e) => {
-  if (!S.song || e.target.matches("input[type=text], input[type=number], select, textarea")) return;
+  if (!S.song || $("delDialog").open || e.target.matches("input[type=text], input[type=number], select, textarea")) return;
+  if (e.target.matches("input[type=range]") && e.key.startsWith("Arrow")) return;  // let the slider move
   const k = e.key;
   if (S.tapping && (k === " " || k === "j" || k === "J")) { e.preventDefault(); if (!e.repeat) tap(); return; }
   if (S.tapping && k === "Backspace") { e.preventDefault(); untap(); return; }

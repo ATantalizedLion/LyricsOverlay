@@ -331,12 +331,18 @@ def test_lab_apply_guards(lab_server):
     (runs / "good.json").write_text(json.dumps(good))
     assert lab.apply_batch("b") == {"applied": 1, "skipped": []}
     assert (lab_dir(entry) / "applied.json").exists()
+    assert lab.applied_run(lab_dir(entry))["run_id"] == "good"
 
     # A batch run that timed nothing leaves the song's timing alone.
     empty = {**good, "id": "empty", "batch": "e", "stats": {"aligned": 0}, "lines": LINES}
     (runs / "empty.json").write_text(json.dumps(empty))
     assert lab.apply_batch("e") == {"applied": 0, "skipped": [{"song": "Song", "why": "no lines timed"}]}
     assert json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"]
+
+    # Deleting the applied run drops the "in overlay" marker with it.
+    (runs / "good.json").unlink()
+    assert lab.applied_run(lab_dir(entry)) is None
+    (runs / "good.json").write_text(json.dumps(good))
 
     # Timing written by align.py replaces the lab run as what the overlay shows.
     write_cache_lines(entry, good["lines"], 0, "align.py")
@@ -362,6 +368,7 @@ def test_reference_follows_lines_when_lyrics_change():
     out = remap_reference(ref, lines("intro", "hello world", "ok"))
     assert out["words"] == {"1": [1000, 1300], "2": [8000]}
     assert out["texts"] == {"1": "hello world", "2": "ok"}
+    assert out["dropped_lines"] == 1
     # Unchanged lyrics leave it alone; old references without texts are kept as they are.
     assert remap_reference(ref, lines("hello world", "never again", "ok"))["words"] == ref["words"]
     assert remap_reference({"words": {"0": [1]}}, lines("x")) == {"words": {"0": [1]}}

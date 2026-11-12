@@ -17,6 +17,7 @@ import mimetypes
 import queue
 import re
 import secrets
+import sys
 import threading
 import time
 import traceback
@@ -207,7 +208,7 @@ def song_detail(name: str) -> dict:
         if run:
             runs.append(run)
     runs.sort(key=lambda r: r.get("created", 0))
-    applied = read_json(lab / "applied.json")
+    applied = applied_run(lab)
     current = read_json(entry / "lyrics.lrc", {}).get("synced_lyrics") or []
     if any(l.get("segments") for l in current) and not (applied and any(r["id"] == applied.get("run_id") for r in runs)):
         runs.insert(0, overlay_run(lines, current, overlay_info(entry)))
@@ -237,14 +238,16 @@ def remap_reference(ref: dict | None, lines: list[dict]) -> dict | None:
         return ref
     words, texts = ref.get("words") or {}, ref["texts"]
     out, used = {}, set()
-    for key, taps in words.items():
+    # Lines saved without their text stay where they are, so they go first.
+    for key, taps in sorted(words.items(), key=lambda kv: kv[0] in texts):
         try:
             old = int(key)
         except ValueError:
             continue
         text = texts.get(key)
         if text is None:
-            if old < len(lines):
+            if old < len(lines) and old not in used:
+                used.add(old)
                 out[str(old)] = taps
             continue
         matches = [i for i, l in enumerate(lines)
@@ -253,7 +256,9 @@ def remap_reference(ref: dict | None, lines: list[dict]) -> dict | None:
             new = min(matches, key=lambda i: abs(i - old))
             used.add(new)
             out[str(new)] = taps
-    return {**ref, "words": out, "texts": {k: lines[int(k)]["text"] for k in out}}
+    dropped = sum(1 for k, taps in words.items() if any(t is not None for t in taps)) \
+        - sum(1 for taps in out.values() if any(t is not None for t in taps))
+    return {**ref, "words": out, "texts": {k: lines[int(k)]["text"] for k in out}, "dropped_lines": dropped}
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +363,7 @@ def library() -> dict:
         lab = lab_dir(entry)
         runs = [r for r in map(cached_run_summary, run_files(lab)) if r]
         song["run_list"] = sorted(runs, key=lambda r: r.get("created", 0))
-        song["applied"] = read_json(lab / "applied.json")
+        song["applied"] = applied_run(lab)
         songs.append(song)
     return {"songs": songs}
 
@@ -373,6 +378,16 @@ def batch_runs(batch: str) -> list[tuple[Path, Path, dict]]:
             if (entry / "lyrics.lrc").exists():
                 out.append((entry, f, run))
     return out
+
+
+def applied_run(lab: Path) -> dict | None:
+    """Which lab run the overlay uses, if that run still exists. (If it was deleted, the
+    overlay keeps its timing, which then shows as "In overlay now".)"""
+    applied = read_json(lab / "applied.json")
+    if applied and re.fullmatch(r"[\w-]+", applied.get("run_id") or "") \
+            and (lab / "runs" / f"{applied['run_id']}.json").exists():
+        return applied
+    return None
 
 
 def stale_run(entry: Path, run: dict) -> bool:
@@ -828,6 +843,13 @@ def main() -> None:
     p.add_argument("--no-browser", action="store_true", help="Don't open the page in a browser")
     p.add_argument("--fake-models", action="store_true", help=argparse.SUPPRESS)  # for developing the page
     args = p.parse_args()
+    # Job logs are printed too; lyrics contain characters (♪, accents) that a Windows
+    # console or redirected output may not be able to encode, which must not fail a run.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     if args.audio:
         register_files(args.audio)
 

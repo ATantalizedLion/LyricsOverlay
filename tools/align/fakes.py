@@ -78,5 +78,8 @@ class FakePool:
         import soundfile as sf
 
         data, sr = sf.read(str(audio), dtype="float32", always_2d=True)
-        assert sr == ALIGN_SR
-        return data[:, 0]
+        mono = data.mean(axis=1)
+        if sr != ALIGN_SR:  # real recordings (44.1/48 kHz) when developing the page
+            n = int(len(mono) * ALIGN_SR / sr)
+            mono = np.interp(np.arange(n) * sr / ALIGN_SR, np.arange(len(mono)), mono).astype(np.float32)
+        return mono
