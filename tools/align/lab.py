@@ -111,6 +111,40 @@ def run_summary(run: dict) -> dict:
     return {k: v for k, v in run.items() if k != "lines"}
 
 
+_problem_cache: dict[tuple, str | None] = {}
+
+
+def cached_recording_problem(entry: Path) -> str | None:
+    """recording_problem reads the whole recording, so remember it per file version."""
+    rec = entry / RECORDING_FILE
+    try:
+        st = rec.stat()
+    except OSError:
+        return None
+    key = (str(rec), st.st_mtime, st.st_size)
+    if key not in _problem_cache:
+        try:
+            _problem_cache[key] = recording_problem(entry)
+        except Exception as e:  # noqa: BLE001
+            _problem_cache[key] = f"couldn't check the recording: {e}"
+    return _problem_cache[key]
+
+
+def overlay_run(lines: list[dict], current: list[dict]) -> dict:
+    """The syllable timing the overlay uses now (e.g. from align.py --pending), shown as a
+    read-only run so new runs can be compared with it."""
+    out = []
+    for orig, cur in zip(lines, current):
+        segs = cur.get("segments") or []
+        out.append({"time_ms": cur["time_ms"], "orig_time_ms": orig["time_ms"], "text": cur["text"],
+                    "segments": segs, "confidence": None,
+                    "status": "ok" if segs else ("empty" if not cur["text"].strip() else "low")})
+    sung = [l for l in out if l["status"] != "empty"]
+    return {"id": "overlay", "label": "In overlay now", "readonly": True, "created": 0, "config": {},
+            "lines": out, "stats": {"lines": len(sung), "aligned": sum(l["status"] == "ok" for l in sung),
+                                    "mean_confidence": None, "total_s": None}}
+
+
 def song_detail(name: str) -> dict:
     entry = entry_path(name)
     lab = lab_dir(entry)
@@ -130,12 +164,11 @@ def song_detail(name: str) -> dict:
         if run:
             runs.append(run)
     runs.sort(key=lambda r: r.get("created", 0))
-    problem = None
-    if audio is not None and audio.name == RECORDING_FILE:
-        try:
-            problem = recording_problem(entry)
-        except Exception as e:  # noqa: BLE001
-            problem = f"couldn't check the recording: {e}"
+    applied = read_json(lab / "applied.json")
+    current = read_json(entry / "lyrics.lrc", {}).get("synced_lyrics") or []
+    if any(l.get("segments") for l in current) and not (applied and any(r["id"] == applied.get("run_id") for r in runs)):
+        runs.insert(0, overlay_run(lines, current))
+    problem = cached_recording_problem(entry) if audio is not None and audio.name == RECORDING_FILE else None
     vocals = [s for s in SEPARATORS if s != "none" and vocals_cache_path(lab, s).exists()]
     return {
         "id": name,
@@ -148,7 +181,7 @@ def song_detail(name: str) -> dict:
         "lines": lines,
         "runs": runs,
         "reference": read_json(lab / "reference.json"),
-        "applied": read_json(lab / "applied.json"),
+        "applied": applied,
         "vocals": vocals,
     }
 
@@ -277,6 +310,17 @@ class Jobs:
         self.queue.put(job["id"])
         return job
 
+    def cancel_queued(self, batch: str | None = None) -> int:
+        """Drops every job (of `batch`, if given) that hasn't started yet; a running one
+        finishes."""
+        n = 0
+        with self.lock:
+            for j in self.jobs.values():
+                if j["status"] == "queued" and (batch is None or j.get("batch") == batch):
+                    j["status"] = "cancelled"
+                    n += 1
+        return n
+
     def list(self, song: str | None = None) -> list[dict]:
         with self.lock:
             jobs = [dict(j, log=j["log"][-200:]) for j in self.jobs.values() if song is None or j["song"] == song]
@@ -285,7 +329,10 @@ class Jobs:
     def _work(self) -> None:
         while True:
             job = self.jobs[self.queue.get()]
-            job["status"] = "running"
+            with self.lock:
+                if job["status"] != "queued":
+                    continue
+                job["status"] = "running"
 
             def log(msg: str, job=job) -> None:
                 print(msg, flush=True)
@@ -399,7 +446,28 @@ class Handler(BaseHTTPRequestHandler):
         parts = [urllib.parse.unquote(p) for p in url.path.strip("/").split("/") if p]
         return parts, urllib.parse.parse_qs(url.query)
 
+    def _trusted(self) -> bool:
+        """Only this page may use the API. Other websites the browser has open can send
+        requests to 127.0.0.1 too: a wrong Host header means DNS rebinding, a foreign
+        Origin a cross-site request. Changes must also be sent as JSON, which browsers
+        only allow cross-site after a CORS preflight this server never answers."""
+        port = self.server.server_address[1]
+        allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        if self.headers.get("Host") not in allowed:
+            return False
+        origin = self.headers.get("Origin")
+        if origin and origin not in {f"http://{h}" for h in allowed}:
+            return False
+        if self.command in ("POST", "PUT", "DELETE"):
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return False
+        return True
+
     def _guard(self, fn):
+        if not self._trusted():
+            self._json({"error": "forbidden"}, 403)
+            return
         try:
             fn()
         except LookupError as e:
@@ -458,6 +526,9 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self):
         parts, _ = self._route()
         body = self._body()
+        if parts == ["api", "jobs", "cancel"]:
+            self._json({"cancelled": self.jobs.cancel_queued()})
+            return
         if parts == ["api", "recordings", "delete"]:
             self._json(delete_recordings(bool(body.get("clear_timing"))))
             return
@@ -465,14 +536,23 @@ class Handler(BaseHTTPRequestHandler):
             cfg = RunConfig.from_dict(body.get("config") or {})
             batch = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
             label = str(body.get("label") or cfg.summary())[:120]
-            songs = [s["id"] for s in list_songs()]
-            jobs = [self.jobs.submit(song, cfg, label, batch) for song in songs]
-            self._json({"batch": batch, "jobs": len(jobs)})
+            songs, skipped = [], []
+            for s in list_songs():
+                problem = (cached_recording_problem(cache_root() / s["id"])
+                           if s["source"] == "recording" else None)
+                if problem:
+                    skipped.append({"song": f"{s['artist']} - {s['title']}", "problem": problem})
+                else:
+                    songs.append(s["id"])
+            for song in songs:
+                self.jobs.submit(song, cfg, label, batch)
+            self._json({"batch": batch, "jobs": len(songs), "skipped": skipped})
             return
         if parts == ["api", "batch", "apply"]:
             self._json({"applied": apply_batch(str(body.get("batch")))})
             return
         if parts == ["api", "batch", "delete"]:
+            self.jobs.cancel_queued(str(body.get("batch")))
             runs = batch_runs(str(body.get("batch")))
             for _, f, _ in runs:
                 f.unlink(missing_ok=True)

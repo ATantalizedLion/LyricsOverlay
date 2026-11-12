@@ -79,6 +79,14 @@ td .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; v
 .tag.on { border-color: var(--accent); color: var(--accent); }
 kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
 .empty { color: var(--muted); padding: 20px; text-align: center; }
+details.adv { margin: 6px 0; }
+details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 4px 0; }
+.runbar { position: sticky; bottom: 0; background: var(--panel); padding: 8px 0 4px; border-top: 1px solid var(--line); margin: 8px 0 6px; }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 10px; max-width: 460px; padding: 16px 18px; }
+dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog p { margin: 0 0 10px; }
+dialog .row { justify-content: flex-end; margin-top: 14px; }
+button.danger { background: var(--bad); border-color: var(--bad); color: #2a0b0b; font-weight: 600; }
 @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>
 </head>
@@ -87,17 +95,17 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
   <h1>Sync lab</h1>
   <select id="song"></select>
   <span id="songInfo"></span>
-  <button id="delRecBtn" style="margin-left:auto" title="Delete every song the overlay recorded from Spotify">Delete all recordings…</button>
 </header>
 <main>
   <aside>
     <h2>Run settings</h2>
     <div id="form"></div>
-    <div class="row" style="margin-top:8px">
-      <button class="primary" id="runBtn">Run</button>
+    <div class="row runbar">
+      <button class="primary" id="runBtn" title="Run these settings on the open song">Run</button>
       <button id="defaultsBtn" title="align.py --pending uses these settings from now on">Use as default</button>
       <button id="resetBtn" title="Back to the built-in settings">Reset</button>
     </div>
+    <div id="sweepBox">
     <h2>Sweep</h2>
     <div class="help">Queue one run per value, with everything else as above. Separation and model output are cached, so sweeps over the timing settings are quick.</div>
     <div class="row">
@@ -106,6 +114,7 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
     <div class="row" style="margin-top:4px">
       <input type="text" id="sweepValues" style="flex:1" placeholder="values, comma separated">
       <button id="sweepBtn">Queue</button>
+    </div>
     </div>
     <h2>Jobs</h2>
     <div id="jobs" class="jobs"><div class="muted">Nothing queued.</div></div>
@@ -122,6 +131,11 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
       <div class="tablewrap"><table id="batches"></table></div>
       <h2>Songs</h2>
       <div class="tablewrap"><table id="libSongs"></table></div>
+      <h2>Recordings</h2>
+      <div class="row">
+        <button id="delRecBtn" title="Delete every song the overlay recorded from Spotify">Delete all recordings…</button>
+        <span class="muted">For starting over when old recordings are broken or out of sync.</span>
+      </div>
     </div>
     <div id="songView" hidden>
       <div class="transport">
@@ -159,6 +173,15 @@ kbd { background: var(--panel2); border: 1px solid var(--line); border-radius: 4
     </div>
   </section>
 </main>
+<dialog id="delDialog">
+  <h2 style="margin-top:0">Delete all recordings?</h2>
+  <p id="delText"></p>
+  <label id="delTimingRow"><input type="checkbox" id="delTiming"> <span id="delTimingText"></span></label>
+  <div class="row">
+    <button id="delCancel">Cancel</button>
+    <button class="danger" id="delConfirm">Delete</button>
+  </div>
+</dialog>
 <audio id="audio" preload="auto"></audio>
 <script>
 "use strict";
@@ -171,27 +194,27 @@ const FIELDS = [
     help: "Whole song copes better when the LRC line times are off." },
   { key: "unit", label: "Timing unit", type: "select", opts: () => ({ syllable: "Syllables", word: "Words" }) },
   { key: "lang", label: "Language", type: "text", placeholder: "auto", help: "For syllable splitting, e.g. en, nl, ja." },
-  { key: "pad_before_ms", label: "Window before line (ms)", type: "number", step: 50, only: "line" },
-  { key: "pad_after_ms", label: "Window after next line (ms)", type: "number", step: 50, only: "line" },
-  { key: "max_window_ms", label: "Max window (ms)", type: "number", step: 1000, only: "line" },
-  { key: "anchor_slack_ms", label: "Anchor slack (ms)", type: "number", step: 250, only: "song",
+  { key: "pad_before_ms", adv: true, label: "Window before line (ms)", type: "number", step: 50, only: "line" },
+  { key: "pad_after_ms", adv: true, label: "Window after next line (ms)", type: "number", step: 50, only: "line" },
+  { key: "max_window_ms", adv: true, label: "Max window (ms)", type: "number", step: 1000, only: "line" },
+  { key: "anchor_slack_ms", adv: true, label: "Anchor slack (ms)", type: "number", step: 250, only: "song",
     help: "How far a line may drift from its LRC time. 0 = anywhere." },
-  { key: "star", label: "Wildcard padding", type: "checkbox",
+  { key: "star", adv: true, label: "Wildcard padding", type: "checkbox",
     help: "Lets the aligner skip unrelated sound (ad-libs, backing vocals) at window edges." },
-  { key: "min_confidence", label: "Min confidence", type: "number", step: 0.25,
+  { key: "min_confidence", adv: true, label: "Min confidence", type: "number", step: 0.25,
     help: "Lines scoring below this keep line timing only." },
   { key: "offset_ms", label: "Offset (ms)", type: "number", step: 10, help: "Positive makes every syllable later." },
   { key: "skip_backing", label: "Skip (backing vocals)", type: "checkbox",
     help: "Text in parentheses isn't forced onto the audio; its syllables are timed from their neighbours." },
   { key: "auto_shift", label: "Auto shift", type: "checkbox",
     help: "If the singing sits consistently early or late against the LRC (a misjudged recording start), shift the audio to match first." },
-  { key: "retime_lines", label: "Move line starts", type: "checkbox", help: "Start each aligned line at its first syllable." },
+  { key: "retime_lines", adv: true, label: "Move line starts", type: "checkbox", help: "Start each aligned line at its first syllable." },
 ];
 
 const S = {
   options: null, songs: [], song: null, cfg: {}, compare: [], jobs: [], ref: {}, tapping: false,
   cursor: { line: 0, unit: 0 }, tapHistory: [], peaks: null, view: { start: 0, span: 12000 },
-  sourceOffset: 0, colorOf: {}, hover: "", lastLine: -1,
+  sourceOffset: 0, colorOf: {}, hover: "", lastLine: -1, lib: null,
 };
 const audio = $("audio");
 
@@ -211,9 +234,14 @@ const store = { get(k, d) { try { const v = localStorage.getItem("synclab:" + k)
 
 // ---------------------------------------------------------------- settings form
 function renderForm() {
-  const f = $("form");
-  f.innerHTML = "";
+  const form = $("form");
+  form.innerHTML = "";
+  const adv = document.createElement("details");
+  adv.className = "adv"; adv.open = store.get("advOpen", false);
+  adv.innerHTML = "<summary>More settings</summary>";
+  adv.ontoggle = () => store.set("advOpen", adv.open);
   for (const fd of FIELDS) {
+    const f = fd.adv ? adv : form;
     const wrap = document.createElement("div");
     wrap.className = "field"; wrap.dataset.key = fd.key;
     const id = "f_" + fd.key;
@@ -237,6 +265,7 @@ function renderForm() {
     f.append(wrap);
     if (fd.help) { const h = document.createElement("div"); h.className = "help"; h.textContent = fd.help; h.dataset.helpFor = fd.key; f.append(h); }
   }
+  form.append(adv);
   const sp = $("sweepParam");
   sp.innerHTML = FIELDS.map((fd) => `<option value="${fd.key}">${esc(fd.label)}</option>`).join("");
   sp.value = store.get("sweepParam", "offset_ms");
@@ -298,6 +327,7 @@ async function openSong(id, keepView = false) {
   if (!id) {
     S.song = null; store.set("song", ""); audio.pause();
     $("songView").hidden = true; $("noSong").hidden = false; $("songInfo").textContent = "";
+    setLibraryMode(true);
     await loadLibrary(); return;
   }
   store.set("song", id);
@@ -310,18 +340,45 @@ async function openSong(id, keepView = false) {
     S.cursor = { line: firstLineWithUnits(0), unit: 0 }; S.tapHistory = [];
   }
   S.compare = S.compare.filter((rid) => song.runs.some((r) => r.id === rid));
-  song.runs.forEach((r, i) => { S.colorOf[r.id] = COLORS[i % COLORS.length]; });
+  assignColors(song);
   $("noSong").hidden = true; $("songView").hidden = false;
+  setLibraryMode(false);
+  if (changed) window.scrollTo(0, 0);
   const a = song.audio;
   $("songInfo").innerHTML = `${esc(song.artist)} – ${esc(song.title)} · ${song.lines.length} lines · ` +
     (a ? `${a.kind === "recording" ? "Spotify recording" : esc(a.name)}${a.offset_ms ? ` (starts at ${fmt(a.offset_ms)})` : ""}` : "no audio") +
     (song.problem ? ` · <span class="bad">${esc(song.problem)}</span>` : "");
-  if (changed) { S.shift = store.get("audioShift:" + id, 0); $("audioShift").value = S.shift; setupSources(); }
+  if (changed) {
+    // Listen with the latest run's auto shift unless a shift was picked for this song.
+    const latest = song.runs.filter((r) => !r.readonly).slice(-1)[0];
+    S.shift = store.get("audioShift:" + id, null) ?? (latest?.stats.shift_applied_ms || 0);
+    $("audioShift").value = S.shift; setupSources();
+  }
   else refreshSourceOptions();
   renderRuns(); renderLines(); renderRef(); renderKaraoke(true);
   if (changed && !keepView) S.view.start = Math.max(0, (song.lines[0]?.time_ms || 0) - 2000);
   draw();
   pollJobs();
+}
+function setLibraryMode(on) {
+  $("sweepBox").hidden = on;
+  $("runBtn").hidden = on;
+}
+/** Keeps each run's colour when other runs are added or deleted. */
+function assignColors(song) {
+  const saved = store.get("colors:" + song.id, {});
+  const used = new Set();
+  const colorOf = {};
+  for (const r of song.runs) if (saved[r.id]) { colorOf[r.id] = saved[r.id]; used.add(saved[r.id]); }
+  let i = 0;
+  for (const r of song.runs) {
+    if (colorOf[r.id]) continue;
+    const free = COLORS.find((c) => !used.has(c));
+    colorOf[r.id] = free || COLORS[i++ % COLORS.length];
+    used.add(colorOf[r.id]);
+  }
+  S.colorOf = colorOf;
+  store.set("colors:" + song.id, colorOf);
 }
 function refreshSourceOptions() {
   const sel = $("source"), cur = sel.value;
@@ -351,7 +408,7 @@ function setAudioShift(ms) {
   S.sourceOffset += ms - audioShift();
   S.shift = ms;
   $("audioShift").value = ms;
-  if (S.song) store.set("audioShift:" + S.song.id, ms);
+  if (S.song) { store.set("audioShift:" + S.song.id, ms); renderRef(); renderKaraoke(true); }
   seek(t);
 }
 $("audioShift").onchange = () => setAudioShift(Number($("audioShift").value) || 0);
@@ -374,12 +431,15 @@ function unitStarts(line, runLine) {
     return best;
   });
 }
+// Taps are stored against the recording (with the audio shift taken out), so a reference
+// stays valid whatever shift you listen with. A run's times include its own auto shift.
 function scoreRun(run) {
   const errs = []; let refCount = 0;
+  const shift = run.stats.shift_applied_ms || 0;
   S.song.lines.forEach((line, li) => {
     const ref = S.ref[li]; if (!ref) return;
     const got = unitStarts(line, run.lines[li]);
-    ref.forEach((r, k) => { if (r == null) return; refCount++; if (got[k] != null) errs.push(got[k] - r); });
+    ref.forEach((r, k) => { if (r == null) return; refCount++; if (got[k] != null) errs.push(got[k] - shift - r); });
   });
   if (!refCount) return null;
   const abs = errs.map(Math.abs).sort((a, b) => a - b);
@@ -400,7 +460,7 @@ function fmtShift(st) {
 function renderRuns() {
   const t = $("runs");
   const runs = S.song.runs;
-  if (!runs.length) { t.innerHTML = `<tr><td class="muted" style="padding:14px">No runs yet. Pick settings on the left and press Run. The first run on a song separates the vocals, which takes a minute or two on CPU.</td></tr>`; return; }
+  if (!runs.length) { t.innerHTML = `<tr><td class="muted" style="padding:14px">No runs yet. Pick settings on the left and press Run. The first run on a song separates the vocals, which takes a minute or two on CPU (seconds with a GPU); later runs reuse them.</td></tr>`; return; }
   const scores = Object.fromEntries(runs.map((r) => [r.id, scoreRun(r)]));
   const bestMedian = Math.min(...Object.values(scores).filter((s) => s && s.median != null).map((s) => s.median));
   const applied = S.song.applied?.run_id;
@@ -409,11 +469,16 @@ function renderRuns() {
     runs.slice().reverse().map((r) => {
       const sc = scores[r.id], st = r.stats, c = r.config;
       const on = S.compare.includes(r.id);
-      const settings = [c.aligner === "even" ? "even split" : `${c.separator} · ${c.aligner} · ${c.mode}`, c.unit,
+      const settings = r.readonly ? "timing the overlay has now (e.g. from align.py)" : [c.aligner === "even" ? "even split" : `${c.separator} · ${c.aligner} · ${c.mode}`, c.unit,
         c.offset_ms ? `${c.offset_ms > 0 ? "+" : ""}${c.offset_ms} ms` : null, c.retime_lines ? "moved lines" : null].filter(Boolean).join(" · ");
+      const name = r.readonly ? `<span title="Not a lab run: the syllable timing in the overlay's lyrics cache">${esc(r.label)}</span>`
+        : `<span data-act="rename" title="Click to rename" style="cursor:text">${esc(r.label)}</span>`;
+      const actions = r.readonly ? "" : `<button data-act="load" title="Put this run's settings in the form">Settings</button>
+            <button data-act="apply" title="Write this run's timing into the overlay's lyrics cache">Use in overlay</button>
+            <button data-act="del" title="Delete run">✕</button>`;
       return `<tr class="${applied === r.id ? "applied" : ""}" data-id="${r.id}">
         <td><input type="checkbox" data-act="cmp" ${on ? "checked" : ""} title="Compare"> <span class="sw" style="background:${S.colorOf[r.id]}"></span></td>
-        <td><span data-act="rename" title="Click to rename" style="cursor:text">${esc(r.label)}</span>${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}${st.shift_applied_ms ? ` <span class="tag" data-act="shift" style="cursor:pointer" title="This run shifted the audio by ${st.shift_applied_ms} ms to match the LRC. Click to listen with the same shift.">shifted ${st.shift_applied_ms > 0 ? "+" : ""}${st.shift_applied_ms} ms</span>` : ""}</td>
+        <td>${name}${applied === r.id ? ' <span class="tag on">in overlay</span>' : ""}${st.shift_applied_ms ? ` <span class="tag" data-act="shift" style="cursor:pointer" title="This run shifted the audio by ${st.shift_applied_ms} ms to match the LRC. Click to listen with the same shift.">shifted ${st.shift_applied_ms > 0 ? "+" : ""}${st.shift_applied_ms} ms</span>` : ""}</td>
         <td class="muted" title="${esc(JSON.stringify(c))}">${esc(settings)}</td>
         <td class="num">${st.aligned}/${st.lines}</td>
         <td class="num">${st.mean_confidence == null ? "–" : st.mean_confidence.toFixed(2)}</td>
@@ -422,10 +487,8 @@ function renderRuns() {
         <td class="num">${sc && sc.bias != null ? (sc.bias > 0 ? "+" : "") + Math.round(sc.bias) + " ms" : "–"}</td>
         <td class="num">${sc ? Math.round(sc.within * 100) + "%" : "–"}</td>
         <td class="num">${sc ? Math.round(sc.timed * 100) + "%" : "–"}</td>
-        <td class="num muted">${st.total_s}s</td>
-        <td><button data-act="load" title="Put this run's settings in the form">Settings</button>
-            <button data-act="apply" title="Write this run's timing into the overlay's lyrics cache">Use in overlay</button>
-            <button data-act="del" title="Delete run">✕</button></td></tr>`;
+        <td class="num muted">${st.total_s == null ? "–" : st.total_s + "s"}</td>
+        <td>${actions}</td></tr>`;
     }).join("") +
     (applied ? `<tr><td colspan="12" class="muted">The overlay is using “${esc(S.song.applied.label || applied)}”. <button data-act="unapply">Back to line timing</button></td></tr>` : "");
 }
@@ -483,6 +546,13 @@ async function loadLibrary() {
   renderLibrary();
   pollJobs();
 }
+function when(sec) {
+  if (!sec) return "–";
+  const d = new Date(sec * 1000), now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? time : d.toLocaleDateString([], { day: "numeric", month: "short" }) + " " + time;
+}
+const songName = (id) => { const s = S.songs.find((x) => x.id === id); return s ? `${s.artist} – ${s.title}` : id; };
 function batchesOf(lib) {
   const by = new Map();
   for (const song of lib.songs) for (const r of song.run_list) {
@@ -507,8 +577,8 @@ function renderLibrary() {
   const pending = S.jobs.filter((j) => j.batch && (j.status === "queued" || j.status === "running")).length;
   $("batchInfo").textContent = pending ? `${pending} song${pending === 1 ? "" : "s"} still to process…` : `${lib.songs.length} songs`;
   const best = Math.max(...batches.map((b) => b.timed));
-  $("batches").innerHTML = batches.length ? `<tr><th>Batch</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
-    batches.map((b) => `<tr data-batch="${b.id}"><td>${esc(b.label)}</td><td class="muted">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
+  $("batches").innerHTML = batches.length ? `<tr><th>Batch</th><th>Made</th><th>Settings</th><th class="num">Songs</th><th class="num">Lines timed</th><th class="num">Confidence</th><th class="num">Shift</th><th class="num" title="Songs whose singing sits steadily more than 300 ms from the LRC: likely a bad recording start">Off songs</th><th></th></tr>` +
+    batches.map((b) => `<tr data-batch="${b.id}"><td>${esc(b.label)}</td><td class="muted">${when(b.created)}</td><td class="muted">${esc(summary(b.config))}${b.config.offset_ms ? ` · ${b.config.offset_ms > 0 ? "+" : ""}${b.config.offset_ms} ms` : ""}</td>
       <td class="num">${b.songs}</td><td class="num ${b.timed === best ? "good" : ""}">${Math.round(b.timed * 100)}%</td>
       <td class="num">${b.conf == null ? "–" : b.conf.toFixed(2)}</td>
       <td class="num">${b.shift == null ? "–" : (b.shift > 0 ? "+" : "") + b.shift + " ms"}<span class="muted"> (|${b.absShift ?? "–"}|)</span></td>
@@ -550,56 +620,67 @@ $("libSongs").addEventListener("click", (e) => {
 });
 $("batchBtn").onclick = async () => {
   if (!S.songs.length) { alert("There are no recorded songs yet."); return; }
-  const r = await api("/api/batch", { method: "POST", body: { config: S.cfg, label: $("batchLabel").value.trim() } });
-  $("batchLabel").value = "";
-  S.jobs = await api("/api/jobs"); renderJobs(); renderLibrary();
-  pollTimer = setTimeout(pollJobs, 1000);
-  return r;
+  if (!confirm(`Run “${summary(S.cfg)}” on all ${S.songs.length} songs? Songs that haven't been separated yet take a while each.`)) return;
+  try {
+    const r = await api("/api/batch", { method: "POST", body: { config: S.cfg, label: $("batchLabel").value.trim() } });
+    $("batchLabel").value = "";
+    if (r.skipped && r.skipped.length)
+      alert((r.jobs ? `Queued ${r.jobs} song${r.jobs === 1 ? "" : "s"}. Skipped` : "Nothing queued: skipped") +
+        ` ${r.skipped.length} whose recording can't be used:\n\n` +
+        r.skipped.map((x) => `${x.song}: ${x.problem}`).join("\n"));
+    await pollJobs();
+  } catch (e) { alert(e.message); }
 };
 
 // ---------------------------------------------------------------- jobs
 let pollTimer = null;
+const isActive = (j) => j.status === "queued" || j.status === "running";
+const isFinished = (j) => j.status === "done" || j.status === "error";
 async function pollJobs() {
   clearTimeout(pollTimer);
-  if (!S.song) {
-    const jobs = await api("/api/jobs").catch(() => []);
-    const before = new Set(S.jobs.filter((j) => j.status === "done" || j.status === "error").map((j) => j.id));
-    const changed = jobs.some((j) => (j.status === "done" || j.status === "error") && !before.has(j.id));
-    S.jobs = jobs; renderJobs();
-    if (changed && S.lib) S.lib = await api("/api/library");
-    renderLibrary();
-    if (jobs.some((j) => j.status === "queued" || j.status === "running")) pollTimer = setTimeout(pollJobs, 1500);
-    return;
-  }
-  const jobs = await api(`/api/jobs?song=${enc(S.song.id)}`).catch(() => []);
-  const prevDone = new Set(S.jobs.filter((j) => j.status === "done").map((j) => j.id));
-  const finished = jobs.filter((j) => j.status === "done" && !prevDone.has(j.id) && S.jobs.some((p) => p.id === j.id));
+  const jobs = await api("/api/jobs").catch(() => S.jobs);
+  const prev = new Map(S.jobs.map((j) => [j.id, j.status]));
+  const finished = jobs.filter((j) => isFinished(j) && prev.has(j.id) && !isFinished({ status: prev.get(j.id) }));
   S.jobs = jobs;
   renderJobs();
-  if (finished.length) {
-    S.compare = [...S.compare, ...finished.map((j) => j.run_id)];
-    store.set("compare:" + S.song.id, S.compare);
-    await openSong(S.song.id, true);
-    return;
+  if (S.song) {
+    const mine = finished.filter((j) => j.song === S.song.id);
+    if (mine.length) {
+      const runs = mine.filter((j) => j.status === "done" && j.run_id).map((j) => j.run_id);
+      S.compare = [...S.compare, ...runs];
+      store.set("compare:" + S.song.id, S.compare);
+      await openSong(S.song.id, true);  // polls again itself
+      return;
+    }
+  } else {
+    if (finished.length && S.lib) S.lib = await api("/api/library").catch(() => S.lib);
+    renderLibrary();
   }
-  if (jobs.some((j) => j.status === "queued" || j.status === "running")) pollTimer = setTimeout(pollJobs, 1000);
+  if (jobs.some(isActive)) pollTimer = setTimeout(pollJobs, 1200);
 }
 function renderJobs() {
   const el = $("jobs");
-  const jobs = S.jobs.slice().reverse().slice(0, 8);
+  const jobs = S.jobs.slice().reverse();
   if (!jobs.length) { el.innerHTML = `<div class="muted">Nothing queued.</div>`; return; }
-  const active = S.jobs.find((j) => j.status === "running") || jobs[0];
-  el.innerHTML = jobs.map((j) => `<div class="job"><span class="st ${j.status === "error" ? "bad" : j.status === "done" ? "good" : "warn"}">${j.status}</span> ${esc(j.label || summary(j.config))}${S.song ? "" : ` <span class="muted">· ${esc(j.song)}</span>`}${j.error ? `<div class="bad">${esc(j.error)}</div>` : ""}</div>`).join("") +
-    `<pre class="log" id="joblog">${esc(active.log.join("\n"))}</pre>`;
-  const log = $("joblog"); log.scrollTop = log.scrollHeight;
+  const queued = jobs.filter((j) => j.status === "queued").length;
+  const shown = jobs.filter((j) => j.status === "running").concat(jobs.filter((j) => j.status !== "running")).slice(0, 8);
+  const active = jobs.find((j) => j.status === "running") || shown[0];
+  const cls = { error: "bad", done: "good", cancelled: "muted" };
+  el.innerHTML = (queued ? `<div class="row" style="justify-content:space-between"><span class="muted">${queued} queued</span><button id="cancelJobs">Cancel queued</button></div>` : "") +
+    shown.map((j) => `<div class="job"><span class="st ${cls[j.status] || "warn"}">${j.status}</span> ${esc(j.label || summary(j.config))}` +
+      `${S.song && j.song === S.song.id ? "" : `<div class="muted">${esc(songName(j.song))}</div>`}${j.error ? `<div class="bad">${esc(j.error)}</div>` : ""}</div>`).join("") +
+    (jobs.length > shown.length ? `<div class="muted">and ${jobs.length - shown.length} more</div>` : "") +
+    (active.log && active.log.length ? `<pre class="log" id="joblog">${esc(active.log.join("\n"))}</pre>` : "");
+  const log = $("joblog"); if (log) log.scrollTop = log.scrollHeight;
+  const c = $("cancelJobs");
+  if (c) c.onclick = async () => { await api("/api/jobs/cancel", { method: "POST", body: {} }).catch((e) => alert(e.message)); pollJobs(); };
 }
 function summary(c) { return c.aligner === "even" ? "even split" : `${c.separator} + ${c.aligner}, ${c.mode}, ${c.unit}`; }
 async function submit(configs, labels) {
   if (!S.song) { alert("Pick a song first."); return; }
   try {
     await api(`/api/song/${enc(S.song.id)}/runs`, { method: "POST", body: { configs, labels } });
-    const jobs = await api(`/api/jobs?song=${enc(S.song.id)}`); S.jobs = jobs; renderJobs();
-    pollTimer = setTimeout(pollJobs, 500);
+    await pollJobs();
   } catch (e) { alert(e.message); }
 }
 $("runBtn").onclick = () => submit([{ ...S.cfg }], []);
@@ -616,24 +697,35 @@ $("defaultsBtn").onclick = async () => {
   S.options.defaults = { ...S.cfg };
   $("defaultsBtn").textContent = "Saved ✓"; setTimeout(() => ($("defaultsBtn").textContent = "Use as default"), 1500);
 };
+function askDelete(o) {
+  const d = $("delDialog");
+  $("delText").textContent = `This deletes ${o.recordings} recording${o.recordings === 1 ? "" : "s"}` +
+    (o.leftovers ? ` and ${o.leftovers} unfinished one${o.leftovers === 1 ? "" : "s"}` : "") +
+    ` (${o.mb} MB) and the vocals the lab separated from them. Your runs are kept, but those songs leave the list until they're recorded again. This can't be undone.`;
+  $("delTimingRow").hidden = !o.aligned;
+  $("delTiming").checked = false;
+  $("delTimingText").textContent = `Also remove the syllable timing from the ${o.aligned === 1 ? "song that has" : o.aligned + " songs that have"} it, so the overlay records ${o.aligned === 1 ? "it" : "them"} again`;
+  return new Promise((resolve) => {
+    const done = (v) => { d.close(); resolve(v); };
+    $("delCancel").onclick = () => done(null);
+    $("delConfirm").onclick = () => done({ clear_timing: $("delTiming").checked });
+    d.oncancel = () => resolve(null);  // Esc
+    d.showModal();
+    $("delCancel").focus();
+  });
+}
 $("delRecBtn").onclick = async () => {
   try {
     const o = await api("/api/recordings");
     if (!o.recordings && !o.leftovers && !o.markers) { alert("There are no recordings to delete."); return; }
-    if (!confirm(`Delete ${o.recordings} recording${o.recordings === 1 ? "" : "s"}` +
-      (o.leftovers ? ` and ${o.leftovers} unfinished one${o.leftovers === 1 ? "" : "s"}` : "") +
-      ` (${o.mb} MB)? This also deletes the separated vocals the lab made from them. ` +
-      `Runs you made stay, but those songs leave the song list until they're recorded again. This can't be undone.`)) return;
-    let clear = false;
-    if (o.aligned) clear = confirm(`${o.aligned} of these songs have syllable timing in the overlay. ` +
-      `Remove that timing too, so the overlay records them again?\n\nOK: remove it. Cancel: keep it.`);
-    const r = await api("/api/recordings/delete", { method: "POST", body: { clear_timing: clear } });
+    const choice = await askDelete(o);
+    if (!choice) return;
+    const r = await api("/api/recordings/delete", { method: "POST", body: choice });
     alert(`Deleted ${r.recordings + r.leftovers} recording${r.recordings + r.leftovers === 1 ? "" : "s"}` +
       (r.cleared ? ` and removed syllable timing from ${r.cleared} song${r.cleared === 1 ? "" : "s"}` : "") +
       `. Songs you play from now on are recorded fresh (with recording turned on in the overlay).`);
     audio.pause(); audio.removeAttribute("src");
     S.song = null; await loadSongs();
-    if (!S.song) openSong("");
   } catch (e) { alert(e.message); }
 };
 $("resetBtn").onclick = () => { S.cfg = { ...S.options.builtin }; writeForm(S.cfg); store.set("cfg", S.cfg); };
@@ -677,7 +769,7 @@ function renderKaraoke(rebuild = false) {
       const line = S.song.lines[li]; text = line ? line.text : "";
       const ref = S.ref[li] || [];
       sung = 0;
-      if (line) line.units.forEach((u, k) => { if (ref[k] != null && t >= ref[k]) sung = u.offset + [...u.text].length; });
+      if (line) line.units.forEach((u, k) => { if (ref[k] != null && t >= ref[k] + audioShift()) sung = u.offset + [...u.text].length; });
       if (line && !ref.some((x) => x != null)) note = "not tapped";
     } else {
       li = lineIndexAt(r.lines, t);
@@ -715,7 +807,7 @@ function renderRef() {
     const ref = S.ref[i] || [];
     return `<div><span class="muted" style="font-size:12px">${fmt(lines[i].time_ms)}</span> ` + lines[i].units.map((u, k) => {
       const done = ref[k] != null, cur = S.tapping && i === li && k === S.cursor.unit;
-      return `<span class="w ${done ? "done" : ""} ${cur ? "cursor" : ""}" data-l="${i}" data-k="${k}">${esc(u.text.trim())}${done ? `<small>${fmt(ref[k])}</small>` : ""}</span>`;
+      return `<span class="w ${done ? "done" : ""} ${cur ? "cursor" : ""}" data-l="${i}" data-k="${k}">${esc(u.text.trim())}${done ? `<small>${fmt(ref[k] + audioShift())}</small>` : ""}</span>`;
     }).join(" ") + "</div>";
   }).join("");
   const total = lines.reduce((a, l) => a + l.units.length, 0);
@@ -730,7 +822,7 @@ $("refWords").addEventListener("click", (e) => {
   S.tapping = true;
   const ref = S.ref[S.cursor.line];
   const prev = S.cursor.unit > 0 && ref ? ref[S.cursor.unit - 1] : null;
-  seek((prev ?? S.song.lines[S.cursor.line].time_ms) - 1500);
+  seek((prev != null ? prev + audioShift() : S.song.lines[S.cursor.line].time_ms) - 1500);
   renderRef();
 });
 $("tapBtn").onclick = () => { S.tapping = !S.tapping; if (S.tapping && audio.paused) { seek(S.song.lines[S.cursor.line].time_ms - 1500); } renderRef(); };
@@ -744,7 +836,7 @@ function tap() {
   const lines = S.song.lines;
   const { line, unit } = S.cursor;
   if (line >= lines.length || !lines[line].units.length) return;
-  const ms = Math.round(songMs() - Number($("latency").value || 0));
+  const ms = Math.round(songMs() - Number($("latency").value || 0) - audioShift());
   const ref = S.ref[line] || (S.ref[line] = lines[line].units.map(() => null));
   S.tapHistory.push({ line, unit, prev: ref[unit] });
   ref[unit] = ms;
@@ -824,8 +916,10 @@ function draw() {
     ctx.fillStyle = "rgba(255,255,255,.04)"; ctx.fillRect(0, y0 + 1, w, h - 2);
     for (const [li, arr] of Object.entries(S.ref)) {
       const line = S.song.lines[li]; if (!line) continue;
-      arr.forEach((ms, k) => {
-        if (ms == null || ms < v.start - 2000 || ms > v.start + v.span) return;
+      arr.forEach((rec, k) => {
+        if (rec == null) return;
+        const ms = rec + audioShift();
+        if (ms < v.start - 2000 || ms > v.start + v.span) return;
         const px = x(ms);
         ctx.fillStyle = "#fff"; ctx.fillRect(px - 1, y0 + 3, 2, h - 6);
         ctx.fillText(line.units[k].text.trim(), px + 4, y0 + h / 2);

@@ -279,8 +279,12 @@ def test_lab_deletes_all_recordings(lab_server):
     assert json.loads(call(f"{base}/api/songs")[2]) == []
 
 
-def test_lab_batches(lab_server, tmp_path):
+def test_lab_batches(lab_server, monkeypatch):
+    import lab
+
     base, entry = lab_server
+    # The stand-in audio is mostly silence, which the recording check would reject.
+    monkeypatch.setattr(lab, "cached_recording_problem", lambda e: None)
     second = entry.parent / "Test-Other-11.000"
     second.mkdir()
     for name in (".meta", "lyrics.lrc", "recording.wav"):
@@ -362,3 +366,44 @@ def test_backing_syllables_are_spread_after_the_lead():
     assert len(backing) == 2
     assert backing[0]["start_ms"] < backing[1]["start_ms"] <= backing[0]["start_ms"] + 400
     assert backing[1]["end_ms"] <= 6000
+
+
+def test_lab_batch_skips_unusable_recordings(lab_server):
+    base, entry = lab_server
+    sf.write(entry / "recording.wav", np.zeros(16_000 * 11, dtype=np.float32), 16_000, subtype="FLOAT")
+    result = json.loads(call(f"{base}/api/batch", "POST", {"config": {}})[2])
+    assert result["jobs"] == 0
+    assert "silent" in result["skipped"][0]["problem"]
+
+
+def test_lab_cancels_queued_jobs(lab_server, monkeypatch):
+    import lab
+
+    base, entry = lab_server
+    gate = threading.Event()
+    real = lab.run_alignment
+    monkeypatch.setattr(lab, "run_alignment", lambda *a, **k: (gate.wait(5), real(*a, **k))[1])
+    sid = urllib.request.quote(entry.name)
+    call(f"{base}/api/song/{sid}/runs", "POST", {"configs": [{}, {}, {}]})
+    time.sleep(0.2)
+    assert json.loads(call(f"{base}/api/jobs/cancel", "POST", {})[2]) == {"cancelled": 2}
+    gate.set()
+    for _ in range(100):
+        state = json.loads(call(f"{base}/api/jobs")[2])
+        if all(j["status"] != "running" for j in state):
+            break
+        time.sleep(0.05)
+    assert sorted(j["status"] for j in state) == ["cancelled", "cancelled", "done"]
+
+
+def test_lab_rejects_requests_from_other_sites(lab_server):
+    base, entry = lab_server
+    for headers in ({"Origin": "https://evil.example"}, {"Host": "evil.example"},
+                    {"Content-Type": "text/plain"}):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(f"{base}/api/batch/delete", "POST", {"batch": "x"}, headers=headers)
+        assert e.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/songs", headers={"Host": "evil.example:80"})
+    assert e.value.code == 403
+    assert call(f"{base}/api/songs", headers={"Origin": base})[0] == 200
