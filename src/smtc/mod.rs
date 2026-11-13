@@ -192,11 +192,15 @@ mod tests {
     #[test]
     fn filetime_to_instant_keeps_milliseconds() {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let ticks =
-            |d: std::time::Duration| (d.as_nanos() / 100) as i64 + 11_644_473_600 * 10_000_000;
+        let ticks = |d: std::time::Duration| {
+            i64::try_from(d.as_nanos() / 100).unwrap() + 11_644_473_600 * 10_000_000
+        };
         // 1.75 s ago must come out as 1.75 s, not rounded to a whole second.
+        let ago = now
+            .checked_sub(std::time::Duration::from_millis(1750))
+            .unwrap();
         let instant = filetime_to_instant(DateTime {
-            UniversalTime: ticks(now - std::time::Duration::from_millis(1750)),
+            UniversalTime: ticks(ago),
         });
         let elapsed = instant.elapsed().as_secs_f64();
         assert!((1.70..1.80).contains(&elapsed), "elapsed = {elapsed}");
