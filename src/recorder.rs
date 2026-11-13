@@ -17,7 +17,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
@@ -94,7 +94,10 @@ struct ActiveRecording {
     cache_root: PathBuf,
     /// This recording's own in-progress file, see `partial_file_name`.
     partial: PathBuf,
-    started_at: Instant,
+    /// When the file's first sample was captured, set by the capture thread once the
+    /// stream runs. Setting up capture takes a moment, so this is later than when the
+    /// recording was started.
+    first_sample_at: Arc<OnceLock<Instant>>,
     duration_ms: u64,
     /// Song position minus time since the capture started, per reading while playing.
     /// For an uninterrupted play these are all (about) the song position at the
@@ -193,16 +196,26 @@ impl SongRecorder {
         let partial = cache_root.join(partial_file_name());
         let path = partial.clone();
         let thread_stop = stop.clone();
+        let first_sample_at = Arc::new(OnceLock::new());
+        let thread_first_sample_at = first_sample_at.clone();
         let handle = std::thread::Builder::new()
             .name("song-recorder".into())
-            .spawn(move || capture(pid, &path, MAX_RECORDING_MS, &thread_stop))
+            .spawn(move || {
+                capture(
+                    pid,
+                    &path,
+                    MAX_RECORDING_MS,
+                    &thread_stop,
+                    &thread_first_sample_at,
+                )
+            })
             .expect("failed to spawn recorder thread");
         let mut active = ActiveRecording {
             track: track_key(np),
             request,
             cache_root,
             partial,
-            started_at: Instant::now(),
+            first_sample_at,
             duration_ms,
             offsets_ms: Vec::new(),
             paused_polls: 0,
@@ -233,10 +246,13 @@ impl ActiveRecording {
         }
         if np.is_playing {
             self.paused_polls = 0;
-            #[allow(clippy::cast_possible_wrap)]
-            self.offsets_ms.push(
-                current_position_ms(np) as i64 - self.started_at.elapsed().as_millis() as i64,
-            );
+            // Readings from before the capture is running can't be tied to the file.
+            if let Some(first_sample_at) = self.first_sample_at.get() {
+                #[allow(clippy::cast_possible_wrap)]
+                self.offsets_ms.push(
+                    current_position_ms(np) as i64 - first_sample_at.elapsed().as_millis() as i64,
+                );
+            }
         } else {
             self.paused_polls += 1;
             if self.paused_polls > MAX_PAUSED_POLLS {
@@ -417,7 +433,13 @@ fn spotify_pid() -> Option<u32> {
 /// nothing while the app is silent), so the file stays in step with real time. Returns
 /// the number of frames written.
 #[allow(clippy::cast_possible_truncation)]
-fn capture(pid: u32, path: &Path, max_ms: u64, stop: &AtomicBool) -> Result<Captured, String> {
+fn capture(
+    pid: u32,
+    path: &Path,
+    max_ms: u64,
+    stop: &AtomicBool,
+    first_sample_at: &OnceLock<Instant>,
+) -> Result<Captured, String> {
     let err = |e: wasapi::WasapiError| e.to_string();
     let _ = wasapi::initialize_mta().ok();
 
@@ -465,7 +487,9 @@ fn capture(pid: u32, path: &Path, max_ms: u64, stop: &AtomicBool) -> Result<Capt
     };
 
     client.start_stream().map_err(err)?;
+    // The file is kept on this clock (see the padding below), so its first sample is now.
     let started = Instant::now();
+    let _ = first_sample_at.set(started);
     let mut queue: VecDeque<u8> = VecDeque::new();
 
     while !stop.load(Ordering::Relaxed) && written < max_frames {

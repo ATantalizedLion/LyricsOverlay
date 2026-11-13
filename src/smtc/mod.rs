@@ -151,11 +151,14 @@ fn filetime_to_instant(dt: DateTime) -> Instant {
     const TICKS_PER_SEC: i64 = 10_000_000;
     const UNIX_EPOCH_OFFSET_SECS: i64 = 11_644_473_600;
 
-    let unix_secs = dt.UniversalTime / TICKS_PER_SEC - UNIX_EPOCH_OFFSET_SECS;
-    let system_time = if unix_secs >= 0 {
-        UNIX_EPOCH + Duration::from_secs(unix_secs.cast_unsigned())
+    // Keep the sub-second part: dropping it put `measured_at` up to a second early, which
+    // made the extrapolated playback position (lyrics and recordings) up to a second ahead.
+    let ticks = dt.UniversalTime - UNIX_EPOCH_OFFSET_SECS * TICKS_PER_SEC;
+    let since_epoch = Duration::from_nanos(ticks.unsigned_abs().saturating_mul(100));
+    let system_time = if ticks >= 0 {
+        UNIX_EPOCH + since_epoch
     } else {
-        UNIX_EPOCH - Duration::from_secs(unix_secs.unsigned_abs())
+        UNIX_EPOCH - since_epoch
     };
 
     match SystemTime::now().duration_since(system_time) {
@@ -184,5 +187,18 @@ mod tests {
 
         let elapsed = instant.elapsed().as_secs_f64();
         assert!((4.0..6.0).contains(&elapsed), "elapsed = {elapsed}");
+    }
+
+    #[test]
+    fn filetime_to_instant_keeps_milliseconds() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let ticks =
+            |d: std::time::Duration| (d.as_nanos() / 100) as i64 + 11_644_473_600 * 10_000_000;
+        // 1.75 s ago must come out as 1.75 s, not rounded to a whole second.
+        let instant = filetime_to_instant(DateTime {
+            UniversalTime: ticks(now - std::time::Duration::from_millis(1750)),
+        });
+        let elapsed = instant.elapsed().as_secs_f64();
+        assert!((1.70..1.80).contains(&elapsed), "elapsed = {elapsed}");
     }
 }
