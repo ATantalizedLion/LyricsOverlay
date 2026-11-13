@@ -111,7 +111,7 @@ as files, pass them: `uv run lab.py "D:\Music\song.flac"`.
 - **Use in overlay** writes a run's timing into the overlay's lyrics cache.
   **Use as default** saves the current settings for `align.py --pending`, so once you've
   found settings you like, batch-processing uses them.
-- **Library** (pick "Library" at the top): **Run on all songs** runs the current settings
+- **Library** (pick "Library" at the top): **Run batch** runs the current settings
   on every recorded song as one batch. Batches are compared on the share of lines timed,
   confidence and *shift* (how far singing sits from the LRC line times), and **Use for
   all** puts a whole batch into the overlay. Tick **Show** on the batches you want as

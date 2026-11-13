@@ -127,7 +127,10 @@ button.danger { background: var(--bad); border-color: var(--bad); color: #2a0b0b
       <div class="help">Run the settings on the left on every recorded song, then compare the batches. Confidence is only comparable between runs that use the same aligner. Shift is where singing starts compared with the LRC line times; a large, steady shift points at a recording that started at the wrong moment, and an offset fixes it.</div>
       <div class="row" style="margin:6px 0 10px">
         <input type="text" id="batchLabel" placeholder="batch name (optional)" style="width:220px">
-        <button class="primary" id="batchBtn">Run on all songs</button>
+        <select id="batchOnly" title="Which songs the batch runs on">
+          <option value="">all songs</option><option value="test">test songs only</option><option value="mine">my recordings only</option>
+        </select>
+        <button class="primary" id="batchBtn">Run batch</button>
         <span class="muted" id="batchInfo"></span>
       </div>
       <div class="tablewrap"><table id="batches"></table></div>
@@ -639,7 +642,7 @@ function renderLibrary() {
       <td class="num ${b.offSongs ? "warn" : ""}">${b.offSongs}</td>
       ${anyRef ? (b.refSongs ? `<td class="num ${b.err === bestErr ? "good" : ""}" title="${b.refSongs} song${b.refSongs === 1 ? "" : "s"} with a reference">${b.err == null ? "–" : Math.round(b.err) + " ms"}</td><td class="num">${b.bias == null ? "–" : (b.bias > 0 ? "+" : "") + Math.round(b.bias) + " ms"}</td><td class="num">${b.within == null ? "–" : Math.round(b.within * 100) + "%"}</td>` : `<td class="num muted">–</td><td></td><td></td>`) : ""}
       <td><button data-act="settings">Settings</button> <button data-act="apply" title="Write this batch's timing into the overlay for every song in it">Use for all</button> <button data-act="del">✕</button></td></tr>`).join("")
-    : `<tr><td class="muted" style="padding:14px">No batches yet. Pick settings on the left and press “Run on all songs”.</td></tr>`;
+    : `<tr><td class="muted" style="padding:14px">No batches yet. Pick settings on the left and press “Run batch”.</td></tr>`;
   const shown = batches.filter((b) => picked.includes(b.id));
   $("libSongs").innerHTML = `<tr><th>Song</th><th>In overlay</th>${shown.map((b) => `<th class="num" style="white-space:normal;min-width:120px">${esc(b.label)}<div class="muted">${when(b.created)}</div></th>`).join("")}</tr>` +
     lib.songs.map((song) => {
@@ -683,11 +686,12 @@ $("libSongs").addEventListener("click", (e) => {
   $("song").value = tr.dataset.song; openSong(tr.dataset.song);
 });
 $("batchBtn").onclick = async () => {
-  const playable = S.songs.filter((x) => x.source).length;
-  if (!playable) { alert("There are no recorded songs yet."); return; }
-  if (!confirm(`Run “${summary(S.cfg)}” on all ${playable} songs with audio? Songs that haven't been separated yet take a while each.`)) return;
+  const only = $("batchOnly").value;
+  const playable = S.songs.filter((x) => x.source && (only === "test" ? x.test_set : only === "mine" ? !x.test_set : true)).length;
+  if (!playable) { alert("There are no songs with audio to run on."); return; }
+  if (!confirm(`Run “${summary(S.cfg)}” on ${playable} songs? Songs that haven't been separated yet take a while each.`)) return;
   try {
-    const r = await api("/api/batch", { method: "POST", body: { config: S.cfg, label: $("batchLabel").value.trim() } });
+    const r = await api("/api/batch", { method: "POST", body: { config: S.cfg, label: $("batchLabel").value.trim(), only } });
     $("batchLabel").value = "";
     if (r.skipped && r.skipped.length)
       alert((r.jobs ? `Queued ${r.jobs} song${r.jobs === 1 ? "" : "s"}. Skipped` : "Nothing queued: skipped") +

@@ -758,8 +758,11 @@ class Handler(BaseHTTPRequestHandler):
             batch = time.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(2)
             label = str(body.get("label") or cfg.summary())[:120]
             songs, skipped = [], []
+            only = body.get("only")  # "test" (hand-timed test songs) or "mine" (everything else)
             for s in list_songs():
                 if s["source"] is None:  # recording deleted; listed only for review
+                    continue
+                if (only == "test" and not s.get("test_set")) or (only == "mine" and s.get("test_set")):
                     continue
                 problem = cached_recording_problem(cache_root() / s["id"]) if s["source"] == "recording" else None
                 if problem:

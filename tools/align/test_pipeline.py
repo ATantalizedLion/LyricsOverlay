@@ -534,7 +534,8 @@ def test_testset_import_scores_batches(lab_server, monkeypatch):
         call(f"{base}/api/song/{urllib.request.quote(name)}/reference", "PUT", {"words": {}})
     assert e.value.code == 400
 
-    call(f"{base}/api/batch", "POST", {"config": {"unit": "word", "offset_ms": 100}})
+    queued = json.loads(call(f"{base}/api/batch", "POST", {"config": {"unit": "word", "offset_ms": 100}, "only": "test"})[2])
+    assert queued["jobs"] == 1  # the test song, not the recorded one
     for _ in range(200):
         state = json.loads(call(f"{base}/api/jobs")[2])
         if state and all(j["status"] in ("done", "error") for j in state):
