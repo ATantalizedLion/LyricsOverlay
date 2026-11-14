@@ -7,6 +7,7 @@ the song plays.
 
 Usage: uv run align.py "path/to/song.flac"   (see README.md)
        uv run align.py --pending            (songs the overlay recorded from Spotify)
+       uv run lab.py                        (tune settings and compare models in a browser)
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tomllib
 import unicodedata
@@ -25,16 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ctc import forced_align
-from text import BLANK, STAR, Syllable, syllabify_line
-
-ALIGN_SR = 16_000
-LINE_PAD_BEFORE_MS = 400
-LINE_PAD_AFTER_MS = 300
-MAX_WINDOW_MS = 30_000
-# Mean log-prob per aligned frame below which a line's timing is dropped (the overlay
-# then shows that line without karaoke). Tuned loosely; see --min-confidence.
-DEFAULT_MIN_CONFIDENCE = -4.0
+from pipeline import (ALIGNERS, SEPARATORS, ModelPool, RunConfig, build_segments,  # noqa: F401
+                      fmt_ms, load_defaults, run_alignment, shift_to_song_time, to_cache_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -121,167 +113,16 @@ def find_cache_entry(root: Path, tags: Tags) -> Path:
     return candidates[0][1]
 
 
-# ---------------------------------------------------------------------------
-# Audio
+RECORDING_FILE = "recording.wav"
+# Written when an entry has been processed but no line could be aligned, so the overlay
+# doesn't keep recording the song (see src/recorder.rs).
+ATTEMPTED_MARKER = ".align-attempted"
 
 
-def load_audio(path: Path, sr: int):
-    """Load as a float32 torch tensor (channels, samples) at `sr`."""
-    import torch
-    import torchaudio
-
-    try:
-        import soundfile as sf
-
-        data, file_sr = sf.read(str(path), dtype="float32", always_2d=True)
-        wav = torch.from_numpy(data.T.copy())
-    except Exception:  # noqa: BLE001 - e.g. m4a/aac, which libsndfile can't read
-        if not shutil.which("ffmpeg"):
-            raise SystemExit(f"Can't read {path.name}; install ffmpeg or convert it to flac/wav/mp3.")
-        raw = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "2", "-ar", str(sr), "-"],
-            check=True, capture_output=True,
-        ).stdout
-        wav = torch.from_numpy(np.frombuffer(raw, dtype=np.float32).reshape(-1, 2).T.copy())
-        file_sr = sr
-    if file_sr != sr:
-        wav = torchaudio.functional.resample(wav, file_sr, sr)
-    return wav
-
-
-def separate_vocals(wav, sr: int, device: str, model):
-    """Returns mono vocals at 16 kHz."""
-    import torch
-    import torchaudio
-    from demucs.apply import apply_model
-
-    if wav.shape[0] == 1:
-        wav = wav.repeat(2, 1)
-    ref = wav.mean(0)
-    mean, std = ref.mean(), ref.std() + 1e-8
-    with torch.inference_mode():
-        sources = apply_model(model, ((wav - mean) / std)[None], device=device,
-                              split=True, overlap=0.25, progress=True)[0]
-    vocals = sources[model.sources.index("vocals")] * std + mean
-    return torchaudio.functional.resample(vocals.mean(0, keepdim=True), sr, ALIGN_SR)
-
-
-# ---------------------------------------------------------------------------
-# Alignment
-
-
-class Aligner:
-    def __init__(self, device: str):
-        import torch
-        import torchaudio
-
-        self.torch = torch
-        self.device = device
-        bundle = torchaudio.pipelines.MMS_FA
-        labels = bundle.get_labels(star="*")
-        assert labels[BLANK] == "-" and labels[STAR] == "*", labels
-        self.model = bundle.get_model(with_star=True).to(device).eval()
-
-    def log_probs(self, wav16k) -> tuple[np.ndarray, float]:
-        """(frames x labels) log-probabilities and seconds per frame."""
-        torch = self.torch
-        with torch.inference_mode():
-            emission, _ = self.model(wav16k.to(self.device))
-            emission = torch.log_softmax(emission[0].float(), dim=-1)
-        frames = emission.shape[0]
-        return emission.cpu().numpy(), wav16k.shape[-1] / ALIGN_SR / max(frames, 1)
-
-
-def align_line(aligner: Aligner, vocals16k, start_ms: int, end_ms: int,
-               syllables: list[Syllable]):
-    """Times (start_ms, end_ms) per syllable, or None for syllables with no tokens.
-    Returns (times, confidence) or None if alignment failed."""
-    a = max(0, int(start_ms * ALIGN_SR / 1000))
-    b = min(vocals16k.shape[-1], int(end_ms * ALIGN_SR / 1000))
-    if b - a < ALIGN_SR // 10:
-        return None
-    log_probs, sec_per_frame = aligner.log_probs(vocals16k[:, a:b])
-
-    # A leading/trailing star token soaks up whatever else is in the window (the end of
-    # the previous line, ad-libs) so it doesn't get forced onto our first/last syllable.
-    targets, owner = [STAR], [-1]
-    for i, syl in enumerate(syllables):
-        targets += syl.tokens
-        owner += [i] * len(syl.tokens)
-    targets.append(STAR)
-    owner.append(-1)
-    if len(targets) == 2:
-        return None
-
-    result = forced_align(log_probs, targets, blank=BLANK)
-    if result is None:
-        return None
-    spans, confidence = result
-
-    def to_ms(frame: int) -> int:
-        return start_ms + round(frame * sec_per_frame * 1000)
-
-    times: list[tuple[int, int] | None] = [None] * len(syllables)
-    for (f0, f1), i in zip(spans, owner):
-        if i < 0:
-            continue
-        t0, t1 = to_ms(f0), to_ms(f1 + 1)
-        if times[i] is None:
-            times[i] = (t0, t1)
-        else:
-            times[i] = (times[i][0], t1)
-    return times, confidence
-
-
-def build_segments(syllables: list[Syllable], times, line_start_ms: int) -> list[dict]:
-    """Turn per-syllable times into the overlay's segment format, filling in syllables
-    that had no tokens (numbers, symbols) from their neighbours, and making each
-    syllable run until the next one starts when they're in the same word."""
-    known = [i for i, t in enumerate(times) if t is not None]
-    filled: list[tuple[int, int]] = []
-    for i, t in enumerate(times):
-        if t is not None:
-            filled.append(t)
-            continue
-        prev = max((k for k in known if k < i), default=None)
-        nxt = min((k for k in known if k > i), default=None)
-        if prev is not None and nxt is not None:
-            s = times[prev][1]
-            filled.append((s, max(s, times[nxt][0])))
-        elif prev is not None:
-            s = times[prev][1]
-            filled.append((s, s))
-        elif nxt is not None:
-            s = times[nxt][0]
-            filled.append((s, s))
-        else:
-            filled.append((line_start_ms, line_start_ms))
-
-    segments = []
-    for i, (syl, (s, e)) in enumerate(zip(syllables, filled)):
-        if i + 1 < len(syllables) and syllables[i + 1].word_index == syl.word_index:
-            e = max(e, filled[i + 1][0])
-        if segments:
-            s = max(s, segments[-1]["start_ms"])
-        segments.append({"start_ms": int(s), "end_ms": int(max(s, e)), "text": syl.text})
-    return segments
-
-
-# ---------------------------------------------------------------------------
-
-
-def detect_language(lines: list[str]) -> str | None:
-    try:
-        from langdetect import DetectorFactory, detect
-
-        DetectorFactory.seed = 0
-        return detect("\n".join(lines))
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def fmt_ms(ms: int) -> str:
-    return f"{ms // 60000:02}:{(ms % 60000) / 1000:05.2f}"
+def lab_dir(entry: Path) -> Path:
+    """Where separated vocals, emissions and lab runs for a cache entry are kept. Outside
+    the overlay's cache so the overlay never has to know about them."""
+    return data_dir() / "align-lab" / entry.name
 
 
 def to_enhanced_lrc(lines: list[dict]) -> str:
@@ -296,45 +137,6 @@ def to_enhanced_lrc(lines: list[dict]) -> str:
     return "\n".join(out) + "\n"
 
 
-RECORDING_FILE = "recording.wav"
-# Written when an entry has been processed but no line could be aligned, so the overlay
-# doesn't keep recording the song (see src/recorder.rs).
-ATTEMPTED_MARKER = ".align-attempted"
-
-
-class Models:
-    """Loaded lazily and shared across songs in --pending mode."""
-
-    def __init__(self, args):
-        import torch
-        from uroman import Uroman
-
-        self.args = args
-        self.device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.romanise = Uroman().romanize_string
-        self._aligner = None
-        self._demucs = None
-
-    @property
-    def aligner(self) -> Aligner:
-        if self._aligner is None:
-            self._aligner = Aligner(self.device)
-        return self._aligner
-
-    def vocals(self, audio: Path):
-        offset_ms = recording_offset_ms(audio)
-        if self.args.no_separation:
-            return shift_to_song_time(load_audio(audio, ALIGN_SR), ALIGN_SR, offset_ms).mean(0, keepdim=True)
-        if self._demucs is None:
-            from demucs.pretrained import get_model
-
-            self._demucs = get_model(self.args.demucs_model)
-            self._demucs.eval()
-        sep_sr = self._demucs.samplerate
-        wav = shift_to_song_time(load_audio(audio, sep_sr), sep_sr, offset_ms)
-        return separate_vocals(wav, sep_sr, self.device, self._demucs)
-
-
 def recording_offset_ms(audio: Path) -> int:
     """For a recording made by the overlay, the song position at its first sample (from
     recording.json next to it); 0 for any other file."""
@@ -347,73 +149,79 @@ def recording_offset_ms(audio: Path) -> int:
         return 0
 
 
-def shift_to_song_time(wav, sr: int, offset_ms: int):
-    """Pads (offset > 0) or trims (offset < 0) the start so sample 0 is song time 0."""
-    import torch
+def original_lines(entry: Path) -> list[dict]:
+    """The entry's lines with their LRC timing, before any alignment touched them: from
+    the backup the first alignment made, as long as it still has the same lines."""
+    current = json.loads((entry / "lyrics.lrc").read_text(encoding="utf-8")).get("synced_lyrics") or []
+    texts = ["".join(s["text"] for s in l["segments"]) if l.get("segments") else l["text"] for l in current]
+    backup = entry / "lyrics.lrc.bak"
+    if backup.exists():
+        try:
+            old = json.loads(backup.read_text(encoding="utf-8")).get("synced_lyrics") or []
+            if [l["text"] for l in old] == texts:
+                return [{"time_ms": int(l["time_ms"]), "text": l["text"]} for l in old]
+        except (OSError, KeyError, json.JSONDecodeError):
+            pass
+    return [{"time_ms": int(l["time_ms"]), "text": t} for l, t in zip(current, texts)]
 
-    n = abs(offset_ms) * sr // 1000
-    if offset_ms > 0:
-        return torch.cat([torch.zeros(wav.shape[0], n, dtype=wav.dtype), wav], dim=1)
-    return wav[:, n:]
+
+OVERLAY_INFO = "overlay.json"
 
 
-def process_entry(entry: Path, audio: Path, models: Models) -> int:
-    """Aligns one cache entry's lyrics to `audio`. Returns the number of lines aligned."""
-    args = models.args
+def write_cache_lines(entry: Path, lines: list[dict], shift_ms: int = 0, source: str = "") -> Path:
+    """Writes aligned lines into the entry's lyrics.lrc, keeping the original as .bak.
+
+    Next to the lab's files it notes how the timing was made (`source`) and the audio
+    shift the alignment applied, so the lab can score that timing against tapped
+    references, which are kept relative to the recording."""
     lyrics_file = entry / "lyrics.lrc"
     song = json.loads(lyrics_file.read_text(encoding="utf-8"))
-    lines = song.get("synced_lyrics") or []
+    backup = entry / "lyrics.lrc.bak"
+    if not backup.exists():
+        shutil.copyfile(lyrics_file, backup)
+    song["synced_lyrics"] = to_cache_lines(lines)
+    lyrics_file.write_text(json.dumps(song, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Whatever wrote this, a lab run applied earlier is no longer what the overlay shows
+    # (the lab writes applied.json again right after, when it's the one applying).
+    (lab_dir(entry) / "applied.json").unlink(missing_ok=True)
+    info = lab_dir(entry) / OVERLAY_INFO
+    if any(l.get("segments") for l in lines):
+        info.parent.mkdir(parents=True, exist_ok=True)
+        info.write_text(json.dumps({"shift_applied_ms": int(shift_ms or 0), "source": source}), encoding="utf-8")
+    else:
+        info.unlink(missing_ok=True)
+    return lyrics_file
+
+
+def overlay_info(entry: Path) -> dict | None:
+    """What write_cache_lines noted about the entry's current timing; None if unknown."""
+    try:
+        return json.loads((lab_dir(entry) / OVERLAY_INFO).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def process_entry(entry: Path, audio: Path, pool: ModelPool, cfg: RunConfig, args) -> int:
+    """Aligns one cache entry's lyrics to `audio`. Returns the number of lines aligned."""
+    lines = original_lines(entry)
     if not lines:
         print(f"{entry.name}: no line-synced lyrics to align, skipping.")
         return 0
-    lang = None if args.words else (args.lang or detect_language([l["text"] for l in lines]))
-    print(f"Aligning {entry.name} ({len(lines)} lines, device {models.device}, "
-          f"syllable language {lang or 'none (whole words)'})")
-
-    if not args.no_separation:
-        print("Separating vocals...")
-    vocals = models.vocals(audio)
-
-    print("Aligning lines...")
-    song_end_ms = int(vocals.shape[-1] * 1000 / ALIGN_SR)
-    aligned = skipped = 0
-    for i, line in enumerate(lines):
-        line.pop("segments", None)
-        text = line["text"]
-        if not text.strip():
-            continue
-        next_ms = lines[i + 1]["time_ms"] if i + 1 < len(lines) else song_end_ms
-        start = max(0, line["time_ms"] - LINE_PAD_BEFORE_MS)
-        end = min(next_ms + LINE_PAD_AFTER_MS, start + MAX_WINDOW_MS, song_end_ms)
-        syllables = syllabify_line(text, lang, models.romanise)
-        result = align_line(models.aligner, vocals, start, end, syllables)
-        if result is None or result[1] < args.min_confidence:
-            score = "failed" if result is None else f"{result[1]:.2f}"
-            print(f"  skip  [{fmt_ms(line['time_ms'])}] ({score}) {text}")
-            skipped += 1
-            continue
-        times, confidence = result
-        line["segments"] = build_segments(syllables, times, line["time_ms"])
-        line["text"] = "".join(s["text"] for s in line["segments"])
-        print(f"  ok    [{fmt_ms(line['time_ms'])}] ({confidence:.2f}) "
-              + "|".join(s["text"].strip() for s in line["segments"]))
-        aligned += 1
-
-    print(f"Aligned {aligned} lines, skipped {skipped}.")
-    lrc = to_enhanced_lrc(lines)
+    print(f"Aligning {entry.name}")
+    result = run_alignment(lines, audio, recording_offset_ms(audio), cfg, pool,
+                           cache_dir=lab_dir(entry))
+    aligned = result["stats"]["aligned"]
+    lrc = to_enhanced_lrc(result["lines"])
     if args.lrc_out:
         args.lrc_out.write_text(lrc, encoding="utf-8")
         print(f"Wrote {args.lrc_out}")
     if args.dry_run:
         print(lrc)
         return aligned
-
     if aligned:
-        backup = entry / "lyrics.lrc.bak"
-        if not backup.exists():
-            shutil.copyfile(lyrics_file, backup)
-        lyrics_file.write_text(json.dumps(song, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(f"Updated {lyrics_file} (original kept as {backup.name}). "
+        lyrics_file = write_cache_lines(entry, result["lines"], result["stats"].get("shift_applied_ms") or 0,
+                                        "align.py")
+        print(f"Updated {lyrics_file} (original kept as lyrics.lrc.bak). "
               "It shows up the next time the song starts.")
     return aligned
 
@@ -428,8 +236,9 @@ def audible_share(path: Path) -> float:
     import soundfile as sf
 
     audible = total = 0
-    for block in sf.blocks(str(path), blocksize=1 << 16, dtype="int16", always_2d=True):
-        audible += int((np.abs(block.astype(np.int32)).max(axis=1) > AUDIBLE_LEVEL).sum())
+    # Read as float: libsndfile reads float WAVs as all zeros when asked for int16.
+    for block in sf.blocks(str(path), blocksize=1 << 16, dtype="float32", always_2d=True):
+        audible += int((np.abs(block).max(axis=1) > AUDIBLE_LEVEL / 32768).sum())
         total += block.shape[0]
     return audible / total if total else 0.0
 
@@ -476,6 +285,22 @@ def pending_entries(root: Path, redo: bool = False) -> list[Path]:
                   if entry_needs_alignment(e) and not (e / ATTEMPTED_MARKER).exists())
 
 
+def config_from_args(args) -> RunConfig:
+    """The lab's saved defaults (if any), overridden by whatever was given on the command line."""
+    cfg = load_defaults(data_dir()).to_dict()
+    overrides = {
+        "separator": "none" if args.no_separation else (args.separator or args.demucs_model),
+        "aligner": args.aligner,
+        "mode": args.mode,
+        "unit": "word" if args.words else None,
+        "lang": args.lang,
+        "min_confidence": args.min_confidence,
+        "offset_ms": args.offset,
+    }
+    cfg.update({k: v for k, v in overrides.items() if v is not None})
+    return RunConfig.from_dict(cfg)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("audio", type=Path, nargs="?",
@@ -488,16 +313,23 @@ def main() -> None:
     p.add_argument("--delete-audio", action="store_true",
                    help="With --pending, delete each recording once it has been processed")
     p.add_argument("--entry", type=Path, help="Cache entry folder to update, instead of finding it from the file's tags")
-    p.add_argument("--lang", help="Lyrics language (ISO code, e.g. en, nl, ja) for syllable splitting; detected if omitted")
-    p.add_argument("--words", action="store_true", help="Time whole words instead of syllables")
-    p.add_argument("--no-separation", action="store_true", help="Skip vocal separation (faster, much less accurate)")
-    p.add_argument("--demucs-model", default="htdemucs", help="Demucs model name (default: htdemucs; htdemucs_ft is slower but cleaner)")
-    p.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE,
-                   help=f"Drop timing for lines aligned less confidently than this (default {DEFAULT_MIN_CONFIDENCE})")
+    g = p.add_argument_group("alignment settings (default: what the lab saved with 'Use as default', "
+                             "otherwise the built-in defaults)")
+    g.add_argument("--separator", choices=sorted(SEPARATORS), help="Vocal separation model")
+    g.add_argument("--demucs-model", help=argparse.SUPPRESS)
+    g.add_argument("--no-separation", action="store_true", help="Same as --separator none")
+    g.add_argument("--aligner", choices=sorted(ALIGNERS), help="Alignment model")
+    g.add_argument("--mode", choices=["line", "song"], help="Align line by line, or the whole song at once")
+    g.add_argument("--lang", help="Lyrics language (ISO code, e.g. en, nl, ja) for syllable splitting; detected if omitted")
+    g.add_argument("--words", action="store_true", help="Time whole words instead of syllables")
+    g.add_argument("--min-confidence", type=float, help="Drop timing for lines aligned less confidently than this")
+    g.add_argument("--offset", type=int, help="Shift all syllable times by this many ms (positive = later)")
     p.add_argument("--device", default=None, help="cpu or cuda (default: cuda if available)")
     p.add_argument("--dry-run", action="store_true", help="Print the result as Enhanced LRC instead of writing the cache")
     p.add_argument("--lrc-out", type=Path, help="Also write the result as an Enhanced LRC file")
     args = p.parse_args()
+    cfg = config_from_args(args)
+    print(f"Settings: {cfg.summary()}")
 
     if args.pending:
         if args.audio or args.entry or args.lrc_out:
@@ -510,7 +342,7 @@ def main() -> None:
                   "timing' in the overlay's settings and play some songs from the start.")
             return
         print(f"{len(entries)} recording(s) to process.")
-        models = Models(args)
+        pool = ModelPool(args.device)
         for n, entry in enumerate(entries, 1):
             print(f"\n[{n}/{len(entries)}] ", end="")
             recording = entry / RECORDING_FILE
@@ -523,7 +355,7 @@ def main() -> None:
                     (entry / "recording.json").unlink(missing_ok=True)
                 continue
             try:
-                aligned = process_entry(entry, recording, models)
+                aligned = process_entry(entry, recording, pool, cfg, args)
             except Exception as e:  # noqa: BLE001 - keep going with the other songs
                 print(f"Failed: {e}")
                 continue
@@ -549,7 +381,7 @@ def main() -> None:
     if not audio.exists():
         raise SystemExit(f"{audio} doesn't exist")
     entry = args.entry or find_cache_entry(cache_root(), read_tags(audio))
-    process_entry(entry, audio, Models(args))
+    process_entry(entry, audio, ModelPool(args.device), cfg, args)
 
 
 if __name__ == "__main__":

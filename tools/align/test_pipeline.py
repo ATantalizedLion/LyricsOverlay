@@ -1,0 +1,549 @@
+"""Pipeline and lab tests with stand-in models: run with `uv run pytest`."""
+
+import json
+import threading
+import time
+import urllib.request
+
+import numpy as np
+import pytest
+import soundfile as sf
+
+from ctc import forced_align_detailed
+from fakes import FakePool, encode, letter_start_ms
+from pipeline import RunConfig, run_alignment, to_cache_lines
+from text import MMS_LABELS
+
+EVENTS = [(1000, "hello world"), (4000, "never again"), (8000, "ok")]
+LINES = [{"time_ms": t, "text": text} for t, text in EVENTS]
+DURATION = 11_000
+
+
+def run(cfg: RunConfig, lines=LINES, events=EVENTS, tmp_path=None, pool=None):
+    audio = encode(events, DURATION)
+    pool = pool or FakePool({"song.wav": audio})
+    if tmp_path is not None:
+        path = tmp_path / "song.wav"
+        if not path.exists():
+            sf.write(path, audio, 16_000, subtype="FLOAT")
+        pool.audio_by_path[str(path)] = audio
+    else:
+        path = None
+    from pathlib import Path
+
+    return run_alignment(lines, path or Path("song.wav"), 0, cfg, pool,
+                         cache_dir=tmp_path, log=lambda *_: None), pool
+
+
+@pytest.fixture(autouse=True)
+def no_stat(monkeypatch):
+    """The fake audio for most tests isn't a real file."""
+    import pipeline
+
+    real = pipeline._source_stamp
+    monkeypatch.setattr(pipeline, "_source_stamp",
+                        lambda a, o: real(a, o) if a.exists() else {"source": str(a), "offset_ms": o})
+
+
+def first_starts(result):
+    return [l["segments"][0]["start_ms"] if l["segments"] else None for l in result["lines"]]
+
+
+def test_line_mode_puts_words_where_they_are_sung():
+    result, _ = run(RunConfig(unit="word"))
+    assert [l["status"] for l in result["lines"]] == ["ok", "ok", "ok"]
+    assert first_starts(result) == [1000, 4000, 8000]
+    second_word = result["lines"][0]["segments"][1]
+    assert second_word["text"] == "world"
+    assert second_word["start_ms"] == letter_start_ms(EVENTS, 5)
+    assert "".join(s["text"] for s in result["lines"][0]["segments"]) == "hello world"
+
+
+def test_offset_and_confidence_cutoff():
+    result, _ = run(RunConfig(unit="word", offset_ms=-120))
+    assert first_starts(result) == [880, 3880, 7880]
+    result, _ = run(RunConfig(unit="word", min_confidence=0.0))
+    assert all(l["status"] == "low" and not l["segments"] for l in result["lines"])
+    assert result["stats"]["aligned"] == 0 and result["stats"]["low"] == 3
+
+
+def test_song_mode_copes_with_wrong_line_times():
+    # The LRC says the second line starts 1.5 s after it's actually sung, so its
+    # line-mode window misses the start of it.
+    wrong = [dict(LINES[0]), {"time_ms": 5500, "text": "never again"}, dict(LINES[2])]
+    line_mode, _ = run(RunConfig(unit="word"), lines=wrong)
+    song_mode, _ = run(RunConfig(unit="word", mode="song", anchor_slack_ms=0), lines=wrong)
+    assert first_starts(song_mode) == [1000, 4000, 8000]
+    assert first_starts(line_mode)[1] != 4000
+    retimed, _ = run(RunConfig(unit="word", mode="song", anchor_slack_ms=0, retime_lines=True), lines=wrong)
+    assert [l["time_ms"] for l in retimed["lines"]] == [1000, 4000, 8000]
+    assert [l["orig_time_ms"] for l in retimed["lines"]] == [1000, 5500, 8000]
+
+
+def test_even_baseline_needs_no_audio():
+    result = run_alignment(LINES, None, 0, RunConfig(aligner="even"), FakePool(), duration_ms=DURATION,
+                           log=lambda *_: None)
+    segs = result["lines"][0]["segments"]
+    assert segs[0]["start_ms"] == 1000
+    assert all(a["end_ms"] <= b["start_ms"] + 1 for a, b in zip(segs, segs[1:]))
+    assert result["stats"]["aligned"] == 3
+    with pytest.raises(ValueError):
+        run_alignment(LINES, None, 0, RunConfig(), FakePool(), log=lambda *_: None)
+
+
+def test_vocals_and_emissions_are_cached(tmp_path):
+    pool = FakePool()
+    run(RunConfig(), tmp_path=tmp_path, pool=pool)
+    run(RunConfig(offset_ms=50, mode="song"), tmp_path=tmp_path, pool=pool)
+    assert pool.separations == 1
+    run(RunConfig(separator="none"), tmp_path=tmp_path, pool=pool)
+    assert pool.separations == 2
+
+
+def test_run_config_validation_and_coercion():
+    cfg = RunConfig.from_dict({"offset_ms": "40", "star": "false", "min_confidence": "-3", "unknown": 1})
+    assert cfg.offset_ms == 40 and cfg.star is False and cfg.min_confidence == -3.0
+    with pytest.raises(ValueError):
+        RunConfig.from_dict({"aligner": "nope"})
+    assert RunConfig.from_dict(cfg.to_dict()) == cfg
+
+
+def test_frame_ranges_anchor_tokens():
+    a = MMS_LABELS.index("a")
+    lp = np.full((20, len(MMS_LABELS)), -5.0)
+    lp[:, 0] = -0.1
+    lp[3, a] = lp[15, a] = -0.01  # two equally good places for one "a"
+    spans, _ = forced_align_detailed(lp, [a], frame_ranges=[(10, 20)])
+    assert spans == [(15, 15)]
+    spans, _ = forced_align_detailed(lp, [a], frame_ranges=[(0, 8)])
+    assert spans == [(3, 3)]
+
+
+def test_cache_lines_format():
+    result, _ = run(RunConfig(unit="word"))
+    lines = to_cache_lines(result["lines"])
+    assert set(lines[0]) == {"time_ms", "text", "segments"}
+    assert set(lines[0]["segments"][0]) == {"start_ms", "end_ms", "text"}
+
+
+# ---------------------------------------------------------------------------
+# Lab server
+
+
+@pytest.fixture
+def lab_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    entry = tmp_path / "LyricsOverlay" / "cache" / "Test-Song-11.000"
+    entry.mkdir(parents=True)
+    (entry / ".meta").write_text(json.dumps({"track_name": "Song", "artist_name": "Test", "duration_sec": 11.0}))
+    (entry / "lyrics.lrc").write_text(json.dumps({"synced_lyrics": LINES, "plain_lyrics": []}))
+    sf.write(entry / "recording.wav", encode(EVENTS, DURATION), 16_000, subtype="FLOAT")
+
+    import lab
+    from http.server import ThreadingHTTPServer
+
+    monkeypatch.setattr(lab, "ModelPool", lambda device=None: FakePool())
+    lab.Handler.jobs = lab.Jobs(None)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), lab.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", entry
+    server.shutdown()
+
+
+def call(url, method="GET", body=None, headers=None):
+    req = urllib.request.Request(url, method=method, data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", **(headers or {})})
+    with urllib.request.urlopen(req) as res:
+        data = res.read()
+        return res.status, dict(res.headers), data
+
+
+def test_lab_end_to_end(lab_server):
+    base, entry = lab_server
+    _, _, body = call(base + "/api/songs")
+    songs = json.loads(body)
+    assert [s["id"] for s in songs] == [entry.name]
+    sid = urllib.request.quote(entry.name)
+
+    _, _, body = call(f"{base}/api/song/{sid}/runs", "POST",
+                      {"configs": [{"unit": "word"}, {"unit": "word", "offset_ms": 100}], "labels": ["a", "b"]})
+    assert len(json.loads(body)["jobs"]) == 2
+    for _ in range(100):
+        state = json.loads(call(f"{base}/api/jobs?song={sid}")[2])
+        if all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    assert [j["status"] for j in state] == ["done", "done"], state
+    song = json.loads(call(f"{base}/api/song/{sid}")[2])
+    assert [r["label"] for r in song["runs"]] == ["a", "b"]
+    assert song["vocals"] == ["htdemucs"]
+    assert [u["text"] for u in song["lines"][0]["units"]] == ["hello ", "world"]
+
+    run_id = song["runs"][0]["id"]
+    call(f"{base}/api/song/{sid}/apply", "POST", {"run_id": run_id})
+    cached = json.loads((entry / "lyrics.lrc").read_text())
+    assert cached["synced_lyrics"][0]["segments"][0]["start_ms"] == 1000
+    assert (entry / "lyrics.lrc.bak").exists()
+    from align import overlay_info
+    assert overlay_info(entry) == {"shift_applied_ms": 0, "source": "lab"}
+    # The lab still works from the original line timing after applying.
+    song = json.loads(call(f"{base}/api/song/{sid}")[2])
+    assert song["applied"]["run_id"] == run_id
+    assert "segments" not in song["lines"][0]
+    call(f"{base}/api/song/{sid}/apply", "POST", {})
+    assert "segments" not in json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]
+    assert overlay_info(entry) is None
+
+    call(f"{base}/api/song/{sid}/reference", "PUT", {"words": {"0": [1000, None]}})
+    assert json.loads(call(f"{base}/api/song/{sid}")[2])["reference"]["words"] == {"0": [1000, None]}
+
+    status, headers, data = call(f"{base}/audio/{sid}/mix", headers={"Range": "bytes=10-19"})
+    assert status == 206 and len(data) == 10 and headers["Content-Range"].endswith(f"/{(entry / 'recording.wav').stat().st_size}")
+    peaks = json.loads(call(f"{base}/api/song/{sid}/peaks?source=vocals:htdemucs")[2])
+    assert len(peaks["peaks"]) == DURATION // 10
+
+    call(f"{base}/api/song/{sid}/runs/{run_id}", "DELETE")
+    assert len(json.loads(call(f"{base}/api/song/{sid}")[2])["runs"]) == 1
+
+    call(f"{base}/api/defaults", "POST", {"offset_ms": -60})
+    from align import data_dir
+    from pipeline import load_defaults
+    assert load_defaults(data_dir()).offset_ms == -60
+
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/song/..%2F..%2Fetc")
+    assert e.value.code == 404
+
+
+def test_chunked_emissions_line_up_with_the_audio():
+    """CtcAligner stitches per-chunk model output onto one 20 ms grid; check with a model
+    that just reads the label off each frame's first sample."""
+    import torch
+
+    from pipeline import CtcAligner
+
+    class ReadLabels(torch.nn.Module):
+        def forward(self, x):
+            n = (x.shape[-1] - 400) // 320 + 1
+            labels = torch.round(x[0, : n * 320 : 320] * 64).long().clamp(0, len(MMS_LABELS) - 1)
+            return torch.nn.functional.one_hot(labels, len(MMS_LABELS)).float()[None] * 20, None
+
+    al = CtcAligner.__new__(CtcAligner)
+    al.torch, al.device, al.model, al.native_star, al.blank = torch, "cpu", ReadLabels(), True, 0
+    rng = np.random.default_rng(1)
+    labels = rng.integers(0, len(MMS_LABELS), size=95 * 50)  # 95 s: several chunks
+    audio = np.repeat((labels / 64.0).astype(np.float32), 320)
+    em = al.emissions(audio, chunk_s=30, context_s=2)
+    assert em.shape == (len(labels), len(MMS_LABELS))
+    assert (em.argmax(axis=1) == labels).mean() > 0.99
+
+    al.native_star = False  # wav2vec2: star column appended as log(1 - p(blank))
+    em = al.emissions(audio[: 320 * 100])
+    assert em.shape[1] == len(MMS_LABELS) + 1
+    blank_frames = labels[:100] == 0
+    assert (em[blank_frames, -1] < -5).all() and (em[~blank_frames, -1] > -0.01).all()
+
+
+def test_lab_deletes_all_recordings(lab_server):
+    import os
+
+    base, entry = lab_server
+    root = entry.parent
+    sid = urllib.request.quote(entry.name)
+    call(f"{base}/api/song/{sid}/runs", "POST", {"configs": [{"unit": "word"}]})
+    for _ in range(100):
+        state = json.loads(call(f"{base}/api/jobs?song={sid}")[2])
+        if state and all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    run_id = json.loads(call(f"{base}/api/song/{sid}")[2])["runs"][0]["id"]
+    call(f"{base}/api/song/{sid}/apply", "POST", {"run_id": run_id})
+    (entry / "recording.json").write_text('{"offset_ms": 0}')
+    other = root / "Other-Song-100.000"
+    other.mkdir()
+    (other / ".align-attempted").touch()
+    old_part, new_part = root / ".recording-1.wav.part", root / ".recording-2.wav.part"
+    old_part.write_bytes(b"x")
+    new_part.write_bytes(b"x")
+    os.utime(old_part, (time.time() - 3600, time.time() - 3600))
+
+    overview = json.loads(call(f"{base}/api/recordings")[2])
+    assert {k: v for k, v in overview.items() if k != "mb"} == {"recordings": 1, "leftovers": 1, "aligned": 1, "markers": 1}
+
+    result = json.loads(call(f"{base}/api/recordings/delete", "POST", {"clear_timing": True})[2])
+    assert result == {"recordings": 1, "leftovers": 1, "cleared": 1, "markers": 1}
+    assert not (entry / "recording.wav").exists() and not (entry / "recording.json").exists()
+    assert not (other / ".align-attempted").exists()
+    assert not old_part.exists() and new_part.exists()  # might still be recording
+    assert "segments" not in json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]
+    from align import lab_dir
+    assert not (lab_dir(entry) / "vocals").exists()
+    assert (lab_dir(entry) / "runs" / f"{run_id}.json").exists()
+    # The song keeps its runs, so it stays listed (without audio) for reviewing them.
+    songs = json.loads(call(f"{base}/api/songs")[2])
+    assert [(s["id"], s["source"]) for s in songs] == [(entry.name, None)]
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/song/{urllib.request.quote(entry.name)}/runs", "POST", {"configs": [{}]})
+    assert e.value.code == 400
+
+
+def test_lab_batches(lab_server, monkeypatch):
+    import lab
+
+    base, entry = lab_server
+    # The stand-in audio is mostly silence, which the recording check would reject.
+    monkeypatch.setattr(lab, "cached_recording_problem", lambda e: None)
+    second = entry.parent / "Test-Other-11.000"
+    second.mkdir()
+    for name in (".meta", "lyrics.lrc", "recording.wav"):
+        (second / name).write_bytes((entry / name).read_bytes())
+    _, _, body = call(f"{base}/api/batch", "POST", {"config": {"unit": "word", "offset_ms": 400}, "label": "late"})
+    batch = json.loads(body)["batch"]
+    for _ in range(200):
+        state = json.loads(call(f"{base}/api/jobs")[2])
+        if state and all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    assert [j["status"] for j in state] == ["done", "done"], state
+    lib = json.loads(call(f"{base}/api/library")[2])
+    runs = [r for s in lib["songs"] for r in s["run_list"]]
+    assert len(runs) == 2 and {r["batch"] for r in runs} == {batch}
+    assert all(r["stats"]["lrc_shift_ms"] == 400 and r["stats"]["lrc_shift_spread_ms"] == 0 for r in runs)
+    assert "lines" not in runs[0]
+
+    assert json.loads(call(f"{base}/api/batch/apply", "POST", {"batch": batch})[2]) == {"applied": 2, "skipped": []}
+    for e in (entry, second):
+        assert json.loads((e / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"][0]["start_ms"] == 1400
+    assert json.loads(call(f"{base}/api/batch/delete", "POST", {"batch": batch})[2]) == {"deleted": 2}
+    assert not any(s["run_list"] for s in json.loads(call(f"{base}/api/library")[2])["songs"])
+
+
+def test_lab_apply_guards(lab_server):
+    import lab
+    from align import lab_dir, write_cache_lines
+
+    base, entry = lab_server
+    runs = lab_dir(entry) / "runs"
+    runs.mkdir(parents=True)
+    good = {"id": "good", "batch": "b", "label": "good", "stats": {"aligned": 1, "shift_applied_ms": -300},
+            "lines": [dict(l, segments=[{"text": l["text"], "start_ms": l["time_ms"], "end_ms": l["time_ms"] + 400}])
+                      for l in LINES]}
+    (runs / "good.json").write_text(json.dumps(good))
+    assert lab.apply_batch("b") == {"applied": 1, "skipped": []}
+    assert (lab_dir(entry) / "applied.json").exists()
+    assert lab.applied_run(lab_dir(entry))["run_id"] == "good"
+
+    # A batch run that timed nothing leaves the song's timing alone.
+    empty = {**good, "id": "empty", "batch": "e", "stats": {"aligned": 0}, "lines": LINES}
+    (runs / "empty.json").write_text(json.dumps(empty))
+    assert lab.apply_batch("e") == {"applied": 0, "skipped": [{"song": "Song", "why": "no lines timed"}]}
+    assert json.loads((entry / "lyrics.lrc").read_text())["synced_lyrics"][0]["segments"]
+
+    # Deleting the applied run drops the "in overlay" marker with it.
+    (runs / "good.json").unlink()
+    assert lab.applied_run(lab_dir(entry)) is None
+    (runs / "good.json").write_text(json.dumps(good))
+
+    # Timing written by align.py replaces the lab run as what the overlay shows.
+    write_cache_lines(entry, good["lines"], 0, "align.py")
+    assert not (lab_dir(entry) / "applied.json").exists()
+
+    # A run made before the lyrics changed isn't written back over them.
+    stale = {**good, "id": "stale", "lines": good["lines"][:2]}
+    (runs / "stale.json").write_text(json.dumps(stale))
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/song/{urllib.request.quote(entry.name)}/apply", "POST", {"run_id": "stale"})
+    assert e.value.code == 400
+
+
+def test_reference_follows_lines_when_lyrics_change():
+    from lab import remap_reference
+
+    def lines(*texts):
+        return [{"text": t, "units": [{"text": w} for w in t.split()]} for t in texts]
+
+    ref = {"words": {"0": [1000, 1300], "1": [4000, None], "2": [8000]},
+           "texts": {"0": "hello world", "1": "never again", "2": "ok"}}
+    # A line was added at the top and "never again" was removed.
+    out = remap_reference(ref, lines("intro", "hello world", "ok"))
+    assert out["words"] == {"1": [1000, 1300], "2": [8000]}
+    assert out["texts"] == {"1": "hello world", "2": "ok"}
+    assert out["dropped_lines"] == 1
+    # Unchanged lyrics leave it alone; old references without texts are kept as they are.
+    assert remap_reference(ref, lines("hello world", "never again", "ok"))["words"] == ref["words"]
+    assert remap_reference({"words": {"0": [1]}}, lines("x")) == {"words": {"0": [1]}}
+
+
+def test_lab_cache_can_be_cleared(lab_server):
+    from align import lab_dir
+
+    base, entry = lab_server
+    vocals = lab_dir(entry) / "vocals" / "htdemucs.wav"
+    vocals.parent.mkdir(parents=True)
+    vocals.write_bytes(b"x" * 2_000_000)
+    (lab_dir(entry) / "runs").mkdir()
+    (lab_dir(entry) / "runs" / "r.json").write_text("{}")
+    assert json.loads(call(f"{base}/api/cache")[2]) == {"mb": 2, "songs": 1}
+    assert json.loads(call(f"{base}/api/cache/clear", "POST", {})[2]) == {"mb": 2, "songs": 1}
+    assert not vocals.exists() and (lab_dir(entry) / "runs" / "r.json").exists()
+
+
+def test_job_history_is_capped(monkeypatch):
+    import lab
+
+    monkeypatch.setattr(lab, "MAX_FINISHED_JOBS", 3)
+    jobs = lab.Jobs.__new__(lab.Jobs)  # no worker thread
+    jobs.jobs, jobs.lock, jobs.queue = {}, threading.Lock(), __import__("queue").Queue()
+    for _ in range(6):
+        job = jobs.submit("song", RunConfig(), "x")
+        job["status"] = "done"
+    assert len(jobs.jobs) == 4  # 3 finished kept + the newest
+
+
+def test_auto_shift_matches_singing_to_the_lrc():
+    # Every line is sung 700 ms after its LRC time, as when a recording's start was
+    # misjudged.
+    texts = ["hello world", "never again", "dig down", "find a way", "ok then", "go home"]
+    lrc = [{"time_ms": 1000 + 1500 * i, "text": t} for i, t in enumerate(texts)]
+    sung = [(l["time_ms"] + 700, l["text"]) for l in lrc]
+    shifted, _ = run(RunConfig(unit="word"), lines=lrc, events=sung)
+    assert shifted["stats"]["shift_applied_ms"] == -700
+    assert first_starts(shifted) == [l["time_ms"] for l in lrc]
+    assert shifted["stats"]["lrc_shift_ms"] == 0
+    kept, _ = run(RunConfig(unit="word", auto_shift=False), lines=lrc, events=sung)
+    assert kept["stats"]["shift_applied_ms"] == 0
+    assert kept["stats"]["lrc_shift_ms"] == 700
+
+
+def test_auto_shift_leaves_small_or_inconsistent_shifts_alone():
+    texts = ["hello world", "never again", "dig down", "find a way", "ok then", "go home"]
+    lrc = [{"time_ms": 1000 + 1500 * i, "text": t} for i, t in enumerate(texts)]
+    jitter = [80, -60, 900, -700, 40, 0]
+    sung = [(l["time_ms"] + j, l["text"]) for l, j in zip(lrc, jitter)]
+    result, _ = run(RunConfig(unit="word"), lines=lrc, events=sung)
+    assert result["stats"]["shift_applied_ms"] == 0
+
+
+def test_backing_vocals_in_parentheses_are_not_forced():
+    from pipeline import mark_backing
+    from text import syllabify_line
+
+    syls = syllabify_line("It's me (hi) I'm the problem", "en", lambda x: x)
+    mark_backing(syls)
+    assert [s.text for s in syls if getattr(s, "backing", False)] == ["(hi) "]
+    whole = syllabify_line("(Ooh, ooh, ooh)", "en", lambda x: x)
+    mark_backing(whole)
+    assert not any(getattr(s, "backing", False) for s in whole)
+
+    # The lead sings "it's me", then a long pause (where only a quiet echo would be), then
+    # "the problem"; the echo isn't in the audio at all.
+    lrc = [{"time_ms": 1000, "text": "it's me (it's me) the problem"}]
+    sung = [(1000, "it's me"), (3000, "the problem")]
+    forced, _ = run(RunConfig(unit="word", skip_backing=False, auto_shift=False), lines=lrc, events=sung)
+    skipped, _ = run(RunConfig(unit="word", auto_shift=False), lines=lrc, events=sung)
+    assert skipped["lines"][0]["confidence"] > forced["lines"][0]["confidence"]
+    segs = skipped["lines"][0]["segments"]
+    assert "".join(s["text"] for s in segs) == "it's me (it's me) the problem"
+    assert [s["start_ms"] for s in segs if s["text"].startswith("the")] == [3000]
+
+
+def test_backing_syllables_are_spread_after_the_lead():
+    lrc = [{"time_ms": 1000, "text": "it's me (it's me)"}, {"time_ms": 6000, "text": "ok"}]
+    sung = [(1000, "it's me"), (6000, "ok")]
+    result, _ = run(RunConfig(unit="word", auto_shift=False), lines=lrc, events=sung)
+    segs = result["lines"][0]["segments"]
+    backing = [s for s in segs if "(" in s["text"] or ")" in s["text"]]
+    assert len(backing) == 2
+    assert backing[0]["start_ms"] < backing[1]["start_ms"] <= backing[0]["start_ms"] + 400
+    assert backing[1]["end_ms"] <= 6000
+
+
+def test_lab_batch_skips_unusable_recordings(lab_server):
+    base, entry = lab_server
+    sf.write(entry / "recording.wav", np.zeros(16_000 * 11, dtype=np.float32), 16_000, subtype="FLOAT")
+    result = json.loads(call(f"{base}/api/batch", "POST", {"config": {}})[2])
+    assert result["jobs"] == 0
+    assert "silent" in result["skipped"][0]["problem"]
+
+
+def test_lab_cancels_queued_jobs(lab_server, monkeypatch):
+    import lab
+
+    base, entry = lab_server
+    gate = threading.Event()
+    real = lab.run_alignment
+    monkeypatch.setattr(lab, "run_alignment", lambda *a, **k: (gate.wait(5), real(*a, **k))[1])
+    sid = urllib.request.quote(entry.name)
+    call(f"{base}/api/song/{sid}/runs", "POST", {"configs": [{}, {}, {}]})
+    time.sleep(0.2)
+    assert json.loads(call(f"{base}/api/jobs/cancel", "POST", {})[2]) == {"cancelled": 2}
+    gate.set()
+    for _ in range(100):
+        state = json.loads(call(f"{base}/api/jobs")[2])
+        if all(j["status"] != "running" for j in state):
+            break
+        time.sleep(0.05)
+    assert sorted(j["status"] for j in state) == ["cancelled", "cancelled", "done"]
+
+
+def test_lab_rejects_requests_from_other_sites(lab_server):
+    base, entry = lab_server
+    for headers in ({"Origin": "https://evil.example"}, {"Host": "evil.example"},
+                    {"Content-Type": "text/plain"}):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            call(f"{base}/api/batch/delete", "POST", {"batch": "x"}, headers=headers)
+        assert e.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as e:
+        call(f"{base}/api/songs", headers={"Host": "evil.example:80"})
+    assert e.value.code == 403
+    assert call(f"{base}/api/songs", headers={"Origin": base})[0] == 200
+
+
+def test_testset_import_scores_batches(lab_server, monkeypatch):
+    import lab
+    import testset
+
+    base, entry = lab_server
+    monkeypatch.setattr(lab, "cached_recording_problem", lambda e: None)
+    root = entry.parent.parent.parent / "jamendo"
+    for sub in ("mp3", "annotations/lines", "annotations/words", "lyrics"):
+        (root / sub).mkdir(parents=True)
+    sf.write(root / "mp3" / "Band_-_Tune.wav", encode(EVENTS, DURATION), 16_000, subtype="FLOAT")
+    (root / "JamendoLyrics.csv").write_text(
+        "Filepath,Artist,Title,Language,LicenseType\nBand_-_Tune.wav,Band,Tune,English,CC BY\n")
+    (root / "annotations" / "lines" / "Band_-_Tune.csv").write_text(
+        "start_time,end_time,lyrics_line\n" + "".join(f'{t / 1000},{t / 1000 + 1},"{x}"\n' for t, x in EVENTS))
+    # The annotation splits "never-again" the way the lyrics don't, and has one word untimed.
+    words = [("hello", 1.0), ("world", 1.4), ("never", 4.0), ("again", float("nan")), ("ok", 8.0)]
+    (root / "lyrics" / "Band_-_Tune.words.txt").write_text("\n".join(w for w, _ in words) + "\n")
+    (root / "annotations" / "words" / "Band_-_Tune.csv").write_text(
+        "word_start,word_end,line_end\n" + "".join(f"{t},{t},nan\n" for _, t in words))
+
+    # mp3/ holds a link stub, as a Windows checkout writes symlinks; the real file is in subsets/.
+    (root / "subsets" / "en" / "mp3").mkdir(parents=True)
+    (root / "mp3" / "Band_-_Tune.wav").replace(root / "subsets" / "en" / "mp3" / "Band_-_Tune.wav")
+    (root / "mp3" / "Band_-_Tune.wav").write_text("../subsets/en/mp3/Band_-_Tune.wav")
+    assert testset.find_audio(root, "Band_-_Tune.wav") == (root / "subsets/en/mp3/Band_-_Tune.wav").resolve()
+
+    row = {"Filepath": "Band_-_Tune.wav", "Artist": "Band", "Title": "Tune", "Language": "English"}
+    name = testset.import_song(root, row)
+    song = json.loads(call(f"{base}/api/song/{urllib.request.quote(name)}")[2])
+    assert song["reference"]["words"] == {"0": [1000, 1400], "1": [4000, None], "2": [8000]}
+    assert song["audio"]["kind"] == "file"
+    with pytest.raises(urllib.error.HTTPError) as e:  # hand timing can't be overwritten
+        call(f"{base}/api/song/{urllib.request.quote(name)}/reference", "PUT", {"words": {}})
+    assert e.value.code == 400
+
+    queued = json.loads(call(f"{base}/api/batch", "POST", {"config": {"unit": "word", "offset_ms": 100}, "only": "test"})[2])
+    assert queued["jobs"] == 1  # the test song, not the recorded one
+    for _ in range(200):
+        state = json.loads(call(f"{base}/api/jobs")[2])
+        if state and all(j["status"] in ("done", "error") for j in state):
+            break
+        time.sleep(0.05)
+    lib = json.loads(call(f"{base}/api/library")[2])
+    tune = next(s for s in lib["songs"] if s["id"] == name)
+    assert tune["test_set"] == "JamendoLyrics"
+    score = tune["run_list"][0]["score"]
+    assert score["n"] == 4 and score["median"] == 100 and score["bias"] > 0
+    assert testset.remove_all() == 1
