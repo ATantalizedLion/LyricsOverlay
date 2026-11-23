@@ -18,7 +18,9 @@ use crate::{
     theming::{self, Theme},
     translation::TranslationRequest,
 };
+use colors::{is_light, readable_gray, text_on, theme_accent, theme_visuals};
 
+mod colors;
 mod lyrics_ui;
 mod media_controls_ui;
 mod resize;
@@ -64,8 +66,11 @@ pub struct LyricsAppUI {
     /// re-request when they change - see `refresh_translation_on_settings_change`.
     translation_settings_key: String,
 
-    /// User-defined themes loaded from the `themes/` folder at startup
-    custom_themes: Vec<Theme>,
+    /// Built-in plus user-defined themes from the `themes/` folder, loaded at startup and
+    /// on Settings > Theme > Reload
+    themes: Vec<Theme>,
+    /// Name typed into Settings > Theme > "Save as theme"
+    theme_name_input: String,
 
     /// When we last wrote window position/size to disk, to avoid hammering it while
     /// the window is actively being dragged or resized.
@@ -100,7 +105,8 @@ impl LyricsAppUI {
             smoothed_lyrics_height: None,
             last_layout_smooth: Instant::now(),
             translation_settings_key: String::new(),
-            custom_themes: theming::load_custom_themes(),
+            themes: theming::load_themes(),
+            theme_name_input: String::new(),
             last_window_save: Instant::now(),
             last_known_window_rect: None,
         }
@@ -289,7 +295,7 @@ impl LyricsAppUI {
                             egui::Button::new(
                                 RichText::new(label)
                                     .size(14.0)
-                                    .color(accent_color(self.settings_cache.current_line_color)),
+                                    .color(theme_accent(&self.settings_cache)),
                             )
                             .frame(true)
                             .frame_when_inactive(false),
@@ -309,7 +315,7 @@ impl LyricsAppUI {
                             egui::Button::new(
                                 RichText::new("─")
                                     .size(14.0)
-                                    .color(accent_color(self.settings_cache.current_line_color)),
+                                    .color(theme_accent(&self.settings_cache)),
                             )
                             .frame(true)
                             .frame_when_inactive(false),
@@ -398,7 +404,7 @@ impl eframe::App for LyricsAppUI {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint();
 
-        let accent = accent_color(self.settings_cache.current_line_color);
+        let accent = theme_accent(&self.settings_cache);
         ctx.set_visuals(egui::Visuals {
             panel_fill: Color32::TRANSPARENT,
             window_fill: Color32::TRANSPARENT,
@@ -470,70 +476,6 @@ impl eframe::App for LyricsAppUI {
     }
 }
 
-/// Blends a theme color partway toward neutral gray, for UI chrome (icons, titles,
-/// window backgrounds) that should hint at the active theme without becoming as loud as
-/// the fully-saturated lyric colors.
-#[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::cast_sign_loss)]
-pub(super) fn accent_color(base: [u8; 3]) -> Color32 {
-    const NEUTRAL: f32 = 170.0;
-    const BLEND: f32 = 0.4;
-    // Always in 0..=255: a weighted average of two values already in that range.
-    let mix = |c: u8| (f32::from(c).mul_add(BLEND, NEUTRAL * (1.0 - BLEND))) as u8;
-    Color32::from_rgb(mix(base[0]), mix(base[1]), mix(base[2]))
-}
-
-/// Perceived brightness of an `[r, g, b]` color, 0 (black) to 255 (white).
-fn luminance(color: [u8; 3]) -> f32 {
-    0.299 * f32::from(color[0]) + 0.587 * f32::from(color[1]) + 0.114 * f32::from(color[2])
-}
-
-/// A gray that stays legible against `background`, for text that isn't itself
-/// theme-colored (section labels, hints, slider/text-edit contents). `value_on_dark` is
-/// the gray value that was tuned by eye assuming a near-black background; on a bright
-/// background it's mirrored (`255 - value_on_dark`) instead, with a smooth blend between
-/// the two as `background` crosses the midpoint - so custom themes with light
-/// backgrounds don't end up with light-gray-on-light-gray text.
-#[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::cast_sign_loss)]
-pub(super) fn readable_gray(background: [u8; 3], value_on_dark: u8) -> Color32 {
-    let t = (luminance(background) / 255.0).clamp(0.0, 1.0);
-    let light_bg_value = 255.0 - f32::from(value_on_dark);
-    let value = f32::from(value_on_dark) + (light_bg_value - f32::from(value_on_dark)) * t;
-    Color32::from_gray(value as u8)
-}
-
-/// Black or white, whichever stays legible on top of `fill` - for text/icons drawn on an
-/// accent-filled (selected) widget, where an accent-colored label would vanish.
-pub(super) fn text_on(fill: Color32) -> Color32 {
-    if luminance([fill.r(), fill.g(), fill.b()]) < 128.0 {
-        Color32::WHITE
-    } else {
-        Color32::BLACK
-    }
-}
-
-/// Base `egui::Visuals` for a panel painted directly on `background`: dark widget chrome
-/// (text-edit fill, slider track, scrollbar, ...) for a dark background, light chrome for
-/// a light one, so those don't default to dark-on-dark or light-on-light for a custom
-/// theme. The selection highlight (checked/selected widget backgrounds) is tied to
-/// `accent` instead of egui's default blue, so it actually reflects the active theme,
-/// with selected widgets' text contrasting against that accent fill.
-pub(super) fn theme_visuals(background: [u8; 3], accent: Color32) -> egui::Visuals {
-    let base = if luminance(background) < 128.0 {
-        egui::Visuals::dark()
-    } else {
-        egui::Visuals::light()
-    };
-    egui::Visuals {
-        selection: egui::style::Selection {
-            bg_fill: accent,
-            stroke: egui::Stroke::new(1.0f32, text_on(accent)),
-        },
-        ..base
-    }
-}
-
 /// egui's built-in font only covers Latin/Cyrillic, so Japanese/Korean (and most other
 /// non-Latin) song titles and lyrics render blank without this. Rather than bundle
 /// multi-megabyte font files with the app, fall back to fonts Windows already ships.
@@ -574,3 +516,4 @@ fn install_fallback_font(ctx: &egui::Context, name: &str, candidates: &[&str]) {
     }
     warn!("No fallback font found for '{name}'; some text may not render");
 }
+

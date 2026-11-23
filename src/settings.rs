@@ -4,7 +4,7 @@ use config::{Config, ConfigError, Environment, File};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 
-use crate::{paths, translation::primary_language};
+use crate::{paths, theming::CLASSIC, translation::primary_language};
 
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,6 +72,11 @@ pub struct Settings {
     pub current_line_color: [u8; 3],
     /// Color of lines not yet sung
     pub future_line_color: [u8; 3],
+    /// Color of icons, titles and selected buttons; `None` derives it from
+    /// `current_line_color`. Configs from before this existed load as `None`, so their
+    /// look doesn't change.
+    #[serde(default)]
+    pub accent_color: Option<[u8; 3]>,
     /// Only show the minimize/settings/close buttons while hovering the window
     pub window_controls_on_hover: bool,
     /// Last known window position (top-left, monitor space, egui points). `None` until
@@ -125,10 +130,11 @@ impl Default for Settings {
             ease_position: EasingModes::Linear,
             ease_color: EasingModes::Cubic,
             media_controls_position: MediaControlsPosition::Hidden,
-            background_color: [0, 0, 0],
-            past_line_color: [200, 180, 255],
-            current_line_color: [255, 255, 255],
-            future_line_color: [180, 210, 255],
+            background_color: CLASSIC.background,
+            past_line_color: CLASSIC.past_line,
+            current_line_color: CLASSIC.current_line,
+            future_line_color: CLASSIC.future_line,
+            accent_color: CLASSIC.accent,
             window_controls_on_hover: false,
             window_pos: None,
             window_size: [680.0, 340.0],

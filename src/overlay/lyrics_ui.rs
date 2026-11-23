@@ -42,7 +42,7 @@ impl LyricsAppUI {
         draw_song_header(
             ui,
             song,
-            super::accent_color(self.settings_cache.current_line_color),
+            super::theme_accent(&self.settings_cache),
             self.title_max_width(ui),
         );
 
@@ -90,10 +90,12 @@ impl LyricsAppUI {
         smooth_line_offsets(&mut self.line_top_offsets, new_offsets, smoothing);
 
         if self.settings_cache.line_progress_bar_position == ProgressBarPosition::Bottom {
-            draw_progress_bar(ui, raw_progress, ui.available_width());
+            let background = self.settings_cache.background_color;
+            draw_progress_bar(ui, background, raw_progress, ui.available_width());
         }
         if self.settings_cache.song_progress_bar_position == ProgressBarPosition::Bottom {
-            draw_progress_bar(ui, song_progress, ui.available_width());
+            let background = self.settings_cache.background_color;
+            draw_progress_bar(ui, background, song_progress, ui.available_width());
         }
     }
 
@@ -290,14 +292,14 @@ impl LyricsAppUI {
                                 == ProgressBarPosition::BelowCurrentLine
                             {
                                 ui.add_space(2.0);
-                                draw_progress_bar(ui, raw_progress, bar_width);
+                                draw_progress_bar(ui, self.settings_cache.background_color, raw_progress, bar_width);
                                 ui.add_space(2.0);
                             }
                             if self.settings_cache.song_progress_bar_position
                                 == ProgressBarPosition::BelowCurrentLine
                             {
                                 ui.add_space(2.0);
-                                draw_progress_bar(ui, song_progress, bar_width);
+                                draw_progress_bar(ui, self.settings_cache.background_color, song_progress, bar_width);
                                 ui.add_space(2.0);
                             }
                         }
@@ -555,15 +557,21 @@ fn lerp_color(a: [u8; 3], b: [u8; 3], t: f32) -> (u8, u8, u8) {
 }
 
 /// Draw progress
-fn draw_progress_bar(ui: &mut Ui, progress: f32, width: f32) {
+fn draw_progress_bar(ui: &mut Ui, background: [u8; 3], progress: f32, width: f32) {
     let height = 2.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let filled_width = rect.width() * progress.clamp(0.0, 1.0);
     let filled_rect = Rect::from_min_size(rect.left_top(), Vec2::new(filled_width, height));
+    // White on dark backgrounds, black on light ones
+    let shade = |alpha| {
+        if super::is_light(background) {
+            Color32::from_black_alpha(alpha)
+        } else {
+            Color32::from_white_alpha(alpha)
+        }
+    };
     // Dim background track
-    ui.painter()
-        .rect_filled(rect, 0.0, Color32::from_white_alpha(30));
+    ui.painter().rect_filled(rect, 0.0, shade(30));
     // Bright filled portion
-    ui.painter()
-        .rect_filled(filled_rect, 0.0, Color32::from_white_alpha(200));
+    ui.painter().rect_filled(filled_rect, 0.0, shade(200));
 }

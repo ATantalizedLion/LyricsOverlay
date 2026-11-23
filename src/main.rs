@@ -65,7 +65,7 @@ pub enum MessageToRT {
 }
 
 fn main() {
-    let path_messages = paths::init();
+    let mut path_messages = paths::init();
 
     // Generate config file if no config is found
     let config_created = !exists(paths::config_file()).unwrap();
@@ -75,7 +75,7 @@ fn main() {
         write!(output, "{str}").unwrap();
     }
 
-    theming::ensure_themes_dir();
+    path_messages.extend(theming::ensure_themes_dir());
 
     // Load settings file
     let settings = match Settings::new() {

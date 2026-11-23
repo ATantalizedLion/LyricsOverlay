@@ -60,7 +60,7 @@ impl super::LyricsAppUI {
     /// hover); the settings viewport itself, once open, keeps being serviced every
     /// frame regardless, since egui's immediate viewports need that to stay alive.
     pub(super) fn settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, show_button: bool) {
-        let accent = super::accent_color(self.settings_cache.current_line_color);
+        let accent = super::theme_accent(&self.settings_cache);
 
         if show_button
             && ui
@@ -94,14 +94,21 @@ impl super::LyricsAppUI {
                 .with_always_on_top() // otherwise the always-on-top main window paints over it
                 .with_resizable(true),
             |ctx, _class| {
-                // Popup/dropdown background: the theme's background, nudged lighter so
-                // dropdowns stay visually distinct from the panel behind them.
-                let lighten = |c: u8| c.saturating_add(12);
+                // Popup/dropdown background: the theme's background, nudged away from
+                // black/white (lighter on dark themes, darker on light ones) so dropdowns
+                // stay visually distinct from the panel behind them.
+                let light = super::is_light(background);
+                let nudge = |c: u8| if light { c.saturating_sub(12) } else { c.saturating_add(12) };
                 let popup_fill = Color32::from_rgb(
-                    lighten(background[0]),
-                    lighten(background[1]),
-                    lighten(background[2]),
+                    nudge(background[0]),
+                    nudge(background[1]),
+                    nudge(background[2]),
                 );
+                let border = if light {
+                    Color32::from_black_alpha(30)
+                } else {
+                    Color32::from_white_alpha(20)
+                };
 
                 ctx.set_visuals(egui::Visuals {
                     panel_fill: Color32::TRANSPARENT,
@@ -138,7 +145,7 @@ impl super::LyricsAppUI {
                 let panel_frame = egui::Frame::new()
                     .fill(Color32::from_rgb(background[0], background[1], background[2]))
                     .corner_radius(10)
-                    .stroke(egui::Stroke::new(1.0f32, Color32::from_white_alpha(20)))
+                    .stroke(egui::Stroke::new(1.0f32, border))
                     .inner_margin(egui::Margin::symmetric(14, 10));
 
                 egui::CentralPanel::default().frame(panel_frame).show(ctx, |ui| {
@@ -156,7 +163,7 @@ impl super::LyricsAppUI {
                         .max_height(scroll_max_height)
                         .show(ui, |ui| {
                             display_settings(ui, background, &mut settings);
-                            theme_settings(ui, background, &mut settings, &self.custom_themes);
+                            self.theme_settings(ui, background, accent, &mut settings);
                             behaviour_settings(ui, background, &mut settings);
                             translation_settings(ui, background, &mut settings);
                             self.authentication_settings(ui, background, &mut settings);
@@ -271,62 +278,130 @@ fn display_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {
     }
 }
 
-fn theme_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings, custom_themes: &[Theme]) {
-    section_label(ui, background, "Theme");
+impl super::LyricsAppUI {
+    fn theme_settings(
+        &mut self,
+        ui: &mut Ui,
+        background: [u8; 3],
+        accent: Color32,
+        settings: &mut Settings,
+    ) {
+        section_label(ui, background, "Theme");
 
-    let apply = |settings: &mut Settings, theme: &Theme| {
-        settings.background_color = theme.background;
-        settings.past_line_color = theme.past_line;
-        settings.current_line_color = theme.current_line;
-        settings.future_line_color = theme.future_line;
-    };
-
-    ui.horizontal_wrapped(|ui| {
-        for theme in &theming::builtin_themes() {
-            if ui.button(&theme.name).clicked() {
-                apply(settings, theme);
-            }
-        }
-    });
-    if !custom_themes.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            for theme in custom_themes {
-                if ui
-                    .button(&theme.name)
-                    .on_hover_text("Custom theme from the themes folder (see Advanced > Data folder)")
-                    .clicked()
-                {
-                    apply(settings, theme);
+            for theme in &self.themes {
+                let active = theme.is_applied_to(settings);
+                let mut text = RichText::new(theme.name.as_ref());
+                if active {
+                    text = text.color(super::text_on(accent));
+                }
+                let mut button = ui.add(egui::Button::new(text).selected(active));
+                if let Some(source) = &theme.source {
+                    button = button.on_hover_text(format!(
+                        "Custom theme from {} (see Advanced > Data folder)",
+                        source.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                }
+                if button.clicked() {
+                    theme.apply_to(settings);
                 }
             }
         });
-    }
-    ui.add_space(4.0);
+        ui.add_space(4.0);
 
+        settings_row(
+            ui,
+            background,
+            "Background",
+            "Background color of the overlay",
+            |ui| {
+                ui.color_edit_button_srgb(&mut settings.background_color);
+            },
+        );
+        settings_row(ui, background, "Past line", "Color of lines already sung", |ui| {
+            ui.color_edit_button_srgb(&mut settings.past_line_color);
+        });
+        settings_row(
+            ui,
+            background,
+            "Current line",
+            "Color of the line currently being sung",
+            |ui| {
+                ui.color_edit_button_srgb(&mut settings.current_line_color);
+            },
+        );
+        settings_row(ui, background, "Future line", "Color of lines not yet sung", |ui| {
+            ui.color_edit_button_srgb(&mut settings.future_line_color);
+        });
+        accent_row(ui, background, accent, settings);
+
+        settings_row(
+            ui,
+            background,
+            "Save as theme",
+            "Save the colors above as a custom theme. A theme with the same name is replaced",
+            |ui| {
+                let save = ui.button("Save").clicked();
+                let edit = ui.add(
+                    egui::TextEdit::singleline(&mut self.theme_name_input)
+                        .hint_text("Name")
+                        .desired_width(110.0)
+                        .text_color(super::readable_gray(background, 200)),
+                );
+                let entered =
+                    edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if save || entered {
+                    let theme = Theme::from_settings(&self.theme_name_input, settings);
+                    match theming::save_theme(&theme, &self.themes) {
+                        Ok(_) => {
+                            self.theme_name_input.clear();
+                            self.themes = theming::load_themes();
+                        }
+                        Err(e) => self.show_error(e),
+                    }
+                }
+            },
+        );
+        settings_row(
+            ui,
+            background,
+            "Themes folder",
+            "Re-read custom themes after adding or editing files in the themes folder",
+            |ui| {
+                if ui.button("Reload").clicked() {
+                    self.themes = theming::load_themes();
+                }
+            },
+        );
+    }
+}
+
+/// Accent color picker, with "Auto" deriving it from the current line color instead.
+fn accent_row(ui: &mut Ui, background: [u8; 3], accent: Color32, settings: &mut Settings) {
     settings_row(
         ui,
         background,
-        "Background",
-        "Background color of the overlay",
+        "Accent",
+        "Color of icons, titles and selected buttons. Auto derives it from the current line color",
         |ui| {
-            ui.color_edit_button_srgb(&mut settings.background_color);
+            if let Some(color) = settings.accent_color.as_mut() {
+                ui.color_edit_button_srgb(color);
+            }
+            let mut auto = settings.accent_color.is_none();
+            if ui
+                .checkbox(
+                    &mut auto,
+                    RichText::new("Auto").color(super::readable_gray(background, 160)),
+                )
+                .changed()
+            {
+                settings.accent_color = (!auto).then(|| {
+                    let [r, g, b, _] = accent.to_array();
+                    [r, g, b]
+                });
+            }
         },
     );
-    settings_row(ui, background, "Past line", "Color of lines already sung", |ui| {
-        ui.color_edit_button_srgb(&mut settings.past_line_color);
-    });
-    settings_row(
-        ui,
-        background,
-        "Current line",
-        "Color of the line currently being sung",
-        |ui| {
-            ui.color_edit_button_srgb(&mut settings.current_line_color);
-        },
-    );
-    settings_row(ui, background, "Future line", "Color of lines not yet sung", |ui| {
-        ui.color_edit_button_srgb(&mut settings.future_line_color);
-    });
 }
 
 fn behaviour_settings(ui: &mut Ui, background: [u8; 3], settings: &mut Settings) {

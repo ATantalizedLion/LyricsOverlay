@@ -57,7 +57,7 @@ impl LyricsAppUI {
     }
 
     fn media_controls_row(&mut self, ui: &mut Ui) {
-        let accent = super::accent_color(self.settings_cache.current_line_color);
+        let accent = super::theme_accent(&self.settings_cache);
 
         ui.horizontal(|ui| {
             if control_button(ui, "⏮", accent).clicked() {

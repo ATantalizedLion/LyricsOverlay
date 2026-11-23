@@ -29,7 +29,7 @@ With Settings → Record Spotify for syllable timing on, songs you play from sta
 
 ## Where files are stored
 Config, cached lyrics, logs and custom themes live in `%APPDATA%\LyricsOverlay` (Settings → Advanced → Data folder → Open). 
-To make your own theme, copy `themes\example.toml.sample` in there to a new `.toml` file and edit the colors.
+To make your own theme, set the colors in Settings → Theme and use **Save as theme**, or copy `themes\example.toml.sample` in there to a new `.toml` file, edit the colors and click **Reload** under Settings → Theme. A custom theme with the same name as a built-in one replaces it.
 
 ## License
 [MIT](LICENSE)
